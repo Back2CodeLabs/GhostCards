@@ -1,0 +1,20 @@
+# Environnements virtuels Python — un seul .venv attendu, dans BackEnd/,
+# jamais versionné (voir BackEnd/README.md pour la procédure d'install).
+.venv/
+.venv*/
+__pycache__/
+*.pyc
+
+# Secrets et données réelles (identifiants Pronote, clés API, base SQLite,
+# fichiers de cours téléchargés, notes déposées par les élèves).
+BackEnd/.env
+BackEnd/secrets/
+BackEnd/data/
+
+# Frontend (Vite + React)
+FrontEnd/node_modules/
+FrontEnd/dist/
+
+# Éditeurs / OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,434 @@
+"""
+API locale de Ghost Cards.
+
+Sert les données stockées en SQLite/disque au frontend, et expose un
+déclencheur de synchronisation Pronote. Pensée pour tourner en permanence
+sur l'OptiPlex (voir README pour le service systemd).
+"""
+import logging
+import sys
+from datetime import datetime
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
+from apscheduler.schedulers.background import BackgroundScheduler
+from pydantic import BaseModel
+import anthropic
+
+# Services/ vit à côté de BackEnd/ (voir GhostCards/README.md pour le
+# schéma d'ensemble) : ce n'est pas un sous-package de `app`, donc on
+# ajoute explicitement la racine GhostCards/ à sys.path pour pouvoir
+# l'importer, quel que soit le répertoire de travail au lancement
+# (systemd démarre avec WorkingDirectory=BackEnd/, pas GhostCards/).
+_GHOSTCARDS_ROOT = Path(__file__).resolve().parents[2]  # BackEnd/app/main.py -> GhostCards/
+if str(_GHOSTCARDS_ROOT) not in sys.path:
+    sys.path.insert(0, str(_GHOSTCARDS_ROOT))
+
+from Services import db, ocr, pronote_sync  # noqa: E402
+from Services.auth import oauth  # noqa: E402
+from Services.config import (  # noqa: E402
+    DOCUMENTS_DIR,
+    ANTHROPIC_API_KEY,
+    BASE_URL,
+    SESSION_SECRET_KEY,
+    GOOGLE_HOSTED_DOMAIN,
+    AUTHORIZED_EMAILS,
+)
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger("ghostcards.api")
+
+if not SESSION_SECRET_KEY:
+    log.warning(
+        "SESSION_SECRET_KEY n'est pas définie dans .env — une clé temporaire est "
+        "utilisée, ce qui déconnectera tout le monde à chaque redémarrage du "
+        "service. Génère-en une avec : python3 -c \"import secrets; print(secrets.token_hex(32))\""
+    )
+
+app = FastAPI(title="Ghost Cards API")
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET_KEY or "cle-temporaire-a-remplacer-dans-.env",
+    same_site="lax",
+    https_only=False,  # déploiement en HTTP simple sur le réseau local pour l'instant
+)
+
+# Le frontend (React) tourne sur un port différent en développement.
+# En production, il est servi en statique par le même serveur : ce middleware
+# devient alors inutile mais reste inoffensif.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+scheduler = BackgroundScheduler()
+
+
+@app.on_event("startup")
+def on_startup():
+    db.init_db()
+    # Synchronisation automatique toutes les 2 heures. Ajuste selon le rythme
+    # de publication des cours de l'établissement.
+    scheduler.add_job(pronote_sync.sync, "interval", hours=2, id="pronote_sync", max_instances=1)
+    scheduler.start()
+    log.info("Ghost Cards API démarrée — synchronisation automatique toutes les 2h.")
+
+
+@app.on_event("shutdown")
+def on_shutdown():
+    scheduler.shutdown(wait=False)
+
+
+# --- Authentification élève (Google) ----------------------------------------
+# Sert uniquement à attribuer les notes déposées à leur auteur. Consulter
+# le site (cours, résumés, flashcards, quiz) ne nécessite pas de connexion.
+
+def _current_eleve(request: Request):
+    eleve_id = request.session.get("eleve_id")
+    if not eleve_id:
+        return None
+    with db.session() as conn:
+        row = conn.execute(
+            "SELECT id, nom, email, avatar_url, role FROM eleves WHERE id = ?", (eleve_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def _require_admin(request: Request) -> dict:
+    """Outil de diagnostic réservé à Cédric (voir HANDOFF.md) — pas une fonctionnalité élève."""
+    eleve = _current_eleve(request)
+    if not eleve or eleve["role"] != "admin":
+        raise HTTPException(403, "Réservé aux administrateurs.")
+    return eleve
+
+
+def _email_autorise(email: str) -> bool:
+    # Aucune restriction configurée -> ouvert à tout compte Google (voir
+    # .env.example pour activer une restriction par domaine ou liste blanche).
+    if not GOOGLE_HOSTED_DOMAIN and not AUTHORIZED_EMAILS:
+        return True
+    return email.lower() in AUTHORIZED_EMAILS
+
+
+@app.get("/auth/login")
+async def auth_login(request: Request):
+    redirect_uri = f"{BASE_URL}/auth/callback"
+    kwargs = {"hd": GOOGLE_HOSTED_DOMAIN} if GOOGLE_HOSTED_DOMAIN else {}
+    return await oauth.google.authorize_redirect(request, redirect_uri, **kwargs)
+
+
+@app.get("/auth/callback")
+async def auth_callback(request: Request):
+    try:
+        token = await oauth.google.authorize_access_token(request)
+    except Exception as e:
+        raise HTTPException(400, f"Échec de connexion Google : {e}")
+
+    userinfo = token.get("userinfo")
+    if not userinfo:
+        userinfo = await oauth.google.userinfo(token=token)
+
+    email = userinfo.get("email", "")
+    if GOOGLE_HOSTED_DOMAIN and userinfo.get("hd") != GOOGLE_HOSTED_DOMAIN:
+        raise HTTPException(403, f"Seuls les comptes @{GOOGLE_HOSTED_DOMAIN} sont autorisés.")
+    if not _email_autorise(email):
+        raise HTTPException(403, "Cette adresse n'est pas autorisée à se connecter à Ghost Cards.")
+
+    with db.session() as conn:
+        eleve_id = db.upsert_eleve(
+            conn,
+            google_sub=userinfo["sub"],
+            email=email,
+            nom=userinfo.get("name") or email,
+            avatar_url=userinfo.get("picture"),
+        )
+    request.session["eleve_id"] = eleve_id
+    return RedirectResponse(url="/")
+
+
+@app.post("/auth/logout")
+def auth_logout(request: Request):
+    request.session.clear()
+    return {"ok": True}
+
+
+@app.get("/api/me")
+def api_me(request: Request):
+    eleve = _current_eleve(request)
+    if not eleve:
+        raise HTTPException(401, "Non connecté")
+    return eleve
+
+
+@app.get("/api/matieres")
+def list_matieres():
+    with db.session() as conn:
+        rows = conn.execute(
+            """SELECT m.id, m.nom, m.slug,
+                      COUNT(DISTINCT c.id) AS nb_cours,
+                      COUNT(DISTINCT d.id) AS nb_documents
+               FROM matieres m
+               LEFT JOIN cours c ON c.matiere_id = m.id
+               LEFT JOIN documents d ON d.cours_id = c.id
+               GROUP BY m.id ORDER BY m.nom"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.get("/api/matieres/{matiere_id}/cours")
+def list_cours(matiere_id: int):
+    with db.session() as conn:
+        rows = conn.execute(
+            """SELECT id, date, heure_debut, heure_fin, professeur, titre, contenu_recupere
+               FROM cours WHERE matiere_id = ? ORDER BY date DESC, heure_debut DESC""",
+            (matiere_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.get("/api/cours/recents")
+def recent_cours(limit: int = 8):
+    with db.session() as conn:
+        rows = conn.execute(
+            """SELECT c.id, c.date, c.heure_debut, c.titre, m.nom AS matiere, m.id AS matiere_id
+               FROM cours c JOIN matieres m ON m.id = c.matiere_id
+               WHERE c.annule = 0
+               ORDER BY c.created_at DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.get("/api/cours/{cours_id}")
+def get_cours(cours_id: int):
+    with db.session() as conn:
+        cours = conn.execute("SELECT * FROM cours WHERE id = ?", (cours_id,)).fetchone()
+        if cours is None:
+            raise HTTPException(404, "Cours introuvable")
+        documents = conn.execute(
+            "SELECT id, nom_fichier, url_externe FROM documents WHERE cours_id = ?", (cours_id,)
+        ).fetchall()
+        notes = conn.execute(
+            "SELECT id, auteur, contenu, type, statut, created_at FROM notes_eleves WHERE cours_id = ? ORDER BY created_at",
+            (cours_id,),
+        ).fetchall()
+        return {
+            **dict(cours),
+            "documents": [dict(d) for d in documents],
+            "notes": [dict(n) for n in notes],
+        }
+
+
+class NoteCreate(BaseModel):
+    contenu: str
+    type: str = "texte"  # 'texte' | 'markdown' — photo/PDF pas encore pris en charge
+
+
+@app.post("/api/cours/{cours_id}/notes")
+def create_note(cours_id: int, payload: NoteCreate, request: Request):
+    eleve = _current_eleve(request)
+    if not eleve:
+        raise HTTPException(401, "Connecte-toi avec Google pour ajouter une note.")
+    contenu = payload.contenu.strip()
+    if not contenu:
+        raise HTTPException(400, "La note est vide.")
+
+    with db.session() as conn:
+        if conn.execute("SELECT 1 FROM cours WHERE id = ?", (cours_id,)).fetchone() is None:
+            raise HTTPException(404, "Cours introuvable")
+        conn.execute(
+            """INSERT INTO notes_eleves (cours_id, eleve_id, auteur, contenu, type, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (cours_id, eleve["id"], eleve["nom"], contenu, payload.type, datetime.now().isoformat(timespec="seconds")),
+        )
+    return {"ok": True}
+
+
+_TYPES_FICHIERS_NOTE = {
+    "application/pdf": (".pdf", "pdf"),
+    "image/png": (".png", "photo"),
+    "image/jpeg": (".jpg", "photo"),
+    "image/webp": (".webp", "photo"),
+}
+
+
+@app.post("/api/cours/{cours_id}/notes/photo")
+def create_note_photo(cours_id: int, request: Request, background_tasks: BackgroundTasks, fichier: UploadFile = File(...)):
+    """
+    Dépôt d'une note sous forme de photo de cahier ou de PDF : le fichier est
+    transcrit en arrière-plan (OCR, voir Services/ocr.py) pour ne pas bloquer
+    la réponse HTTP. `statut` passe à 'pret' une fois la transcription faite
+    (le frontend poll GET /api/cours/{id} pendant ce temps).
+    """
+    eleve = _current_eleve(request)
+    if not eleve:
+        raise HTTPException(401, "Connecte-toi avec Google pour ajouter une note.")
+
+    extension_type = _TYPES_FICHIERS_NOTE.get(fichier.content_type)
+    if extension_type is None:
+        raise HTTPException(400, "Format non supporté (PDF, PNG, JPEG ou WebP uniquement).")
+    extension, type_note = extension_type
+
+    with db.session() as conn:
+        if conn.execute("SELECT 1 FROM cours WHERE id = ?", (cours_id,)).fetchone() is None:
+            raise HTTPException(404, "Cours introuvable")
+
+        dest_dir = DOCUMENTS_DIR / "notes_eleves" / str(cours_id)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        nom_fichier = f"note_{eleve['id']}_{datetime.now().strftime('%Y%m%d%H%M%S')}{extension}"
+        dest_path = dest_dir / nom_fichier
+        dest_path.write_bytes(fichier.file.read())
+        chemin_relatif = str(dest_path.relative_to(DOCUMENTS_DIR.parent))
+
+        cur = conn.execute(
+            """INSERT INTO notes_eleves (cours_id, eleve_id, auteur, chemin_fichier, type, statut, created_at)
+               VALUES (?, ?, ?, ?, ?, 'traitement', ?)""",
+            (cours_id, eleve["id"], eleve["nom"], chemin_relatif, type_note, datetime.now().isoformat(timespec="seconds")),
+        )
+        note_id = cur.lastrowid
+
+    background_tasks.add_task(ocr.transcribe_note, note_id)
+    return {"ok": True, "note_id": note_id}
+
+
+@app.get("/api/traitements")
+def list_traitements(request: Request, limit: int = 50):
+    _require_admin(request)
+    with db.session() as conn:
+        rows = conn.execute(
+            "SELECT * FROM traitements ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.get("/api/traitements/{traitement_id}")
+def get_traitement(traitement_id: int, request: Request):
+    _require_admin(request)
+    with db.session() as conn:
+        row = conn.execute("SELECT * FROM traitements WHERE id = ?", (traitement_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "Traitement introuvable")
+        return dict(row)
+
+
+@app.post("/api/traitements/{traitement_id}/relancer")
+def relancer_traitement(traitement_id: int, request: Request, background_tasks: BackgroundTasks):
+    _require_admin(request)
+    with db.session() as conn:
+        if conn.execute("SELECT 1 FROM traitements WHERE id = ?", (traitement_id,)).fetchone() is None:
+            raise HTTPException(404, "Traitement introuvable")
+    background_tasks.add_task(ocr.relancer_traitement, traitement_id)
+    return {"status": "relance_lancee"}
+
+
+@app.get("/api/devoirs")
+def list_devoirs():
+    with db.session() as conn:
+        rows = conn.execute(
+            """SELECT d.id, d.date_rendu, d.description, d.fait, m.nom AS matiere
+               FROM devoirs d JOIN matieres m ON m.id = d.matiere_id
+               WHERE d.fait = 0 ORDER BY d.date_rendu"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.get("/api/documents/{document_id}/fichier")
+def download_document(document_id: int):
+    with db.session() as conn:
+        doc = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
+        if doc is None or not doc["chemin_local"] or doc["chemin_local"].startswith("lien:"):
+            raise HTTPException(404, "Fichier non disponible localement")
+        path = DOCUMENTS_DIR.parent / doc["chemin_local"]
+        if not path.exists():
+            raise HTTPException(404, "Fichier absent du disque")
+        return FileResponse(path, filename=doc["nom_fichier"])
+
+
+_anthropic_client = None
+
+
+def _get_anthropic():
+    global _anthropic_client
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(500, "ANTHROPIC_API_KEY n'est pas configurée (voir .env).")
+    if _anthropic_client is None:
+        _anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    return _anthropic_client
+
+
+class AssistantMessage(BaseModel):
+    role: str
+    text: str
+
+
+class AssistantRequest(BaseModel):
+    messages: list[AssistantMessage]
+
+
+ASSISTANT_SYSTEM_PROMPT = (
+    "Tu es l'assistant IA de Ghost Cards, une application de révision pour un(e) élève. "
+    "Réponds en français, simplement, en 3 à 5 phrases maximum. Tu n'as pas encore accès "
+    "aux documents détaillés de la classe : si la question porte sur un point précis d'un "
+    "cours, dis-le et réponds avec tes connaissances générales sur le sujet."
+)
+
+
+@app.post("/api/assistant")
+def assistant(payload: AssistantRequest):
+    """
+    Proxy vers l'API Anthropic : la clé reste côté serveur, jamais exposée
+    au navigateur. Le frontend envoie juste l'historique de la conversation.
+    """
+    client = _get_anthropic()
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-5",  # remplacer par "claude-haiku-4-5-20251001" pour un usage moins coûteux
+            max_tokens=600,
+            system=ASSISTANT_SYSTEM_PROMPT,
+            messages=[{"role": m.role, "content": m.text} for m in payload.messages],
+        )
+    except anthropic.APIError as e:
+        raise HTTPException(502, f"Erreur de l'API Anthropic : {e}")
+
+    text = "".join(block.text for block in response.content if block.type == "text")
+    return {"text": text or "Je n'ai pas pu formuler de réponse, réessaie."}
+
+
+@app.post("/api/sync")
+def trigger_sync(background_tasks: BackgroundTasks):
+    """Déclenche une synchronisation immédiate (ex. bouton 'Actualiser' côté site)."""
+    background_tasks.add_task(pronote_sync.sync)
+    return {"status": "sync_lancee"}
+
+
+@app.get("/api/sync/last")
+def last_sync():
+    with db.session() as conn:
+        row = conn.execute("SELECT * FROM sync_log ORDER BY id DESC LIMIT 1").fetchone()
+        return dict(row) if row else None
+
+
+# --- Frontend statique ------------------------------------------------------
+# Monté EN DERNIER, volontairement : Starlette teste les routes dans l'ordre
+# d'ajout, et un Mount("/") matche n'importe quel chemin. S'il était déclaré
+# avant les routes /api/..., il les intercepterait toutes. Ici, /api/* est
+# déjà résolu au-dessus ; seul ce qui n'a matché aucune route API retombe
+# sur le frontend (utile pour le routing côté client de l'app React).
+#
+# Structure attendue sur le disque :
+#   GhostCards/
+#     BackEnd/   (ce projet — app/main.py est ici)
+#     FrontEnd/  (projet Vite, dist/ après `npm run build`)
+_FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "FrontEnd" / "dist"
+if _FRONTEND_DIST.exists():
+    app.mount("/", StaticFiles(directory=_FRONTEND_DIST, html=True), name="frontend")
+    log.info("Frontend statique servi depuis %s", _FRONTEND_DIST)
+else:
+    log.info("Pas de frontend buildé trouvé (%s) — seule l'API est servie.", _FRONTEND_DIST)

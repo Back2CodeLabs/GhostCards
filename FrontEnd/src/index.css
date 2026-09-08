@@ -1,0 +1,109 @@
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+}
+
+/* Petites classes utilitaires (équivalent minimal de Tailwind, sans tirer
+   toute la bibliothèque pour si peu). */
+.flex { display: flex; }
+.items-center { align-items: center; }
+.justify-between { justify-content: space-between; }
+.gap-2 { gap: 8px; }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* --------------------------------------------------------------------- */
+/* Mise en page — barre de nav basse + colonne unique en mobile (défaut),
+   colonne latérale + zone de contenu élargie en desktop.                 */
+/* --------------------------------------------------------------------- */
+
+.gc-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.gc-main {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  order: 1;
+}
+
+.gc-content {
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+}
+
+.gc-nav {
+  order: 2;
+  display: flex;
+  flex-shrink: 0;
+}
+
+/* Listes qui passent d'une colonne empilée (mobile) à une grille
+   (desktop) — utilisée pour les matières et les cours. */
+.gc-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+@media (min-width: 860px) {
+  .gc-shell {
+    flex-direction: row;
+  }
+
+  .gc-nav {
+    order: 0;
+    flex-direction: column;
+    width: 220px;
+    height: 100%;
+    position: sticky;
+    top: 0;
+    justify-content: flex-start;
+    padding-top: 12px;
+    gap: 2px;
+    border-top: none !important;
+  }
+
+  .gc-nav button {
+    flex: none;
+    flex-direction: row !important;
+    justify-content: flex-start !important;
+    gap: 12px;
+    padding: 12px 22px !important;
+  }
+
+  .gc-main {
+    padding: 0 36px;
+  }
+
+  .gc-content {
+    max-width: 800px;
+    padding: 0;
+  }
+
+  .gc-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 14px;
+  }
+}
