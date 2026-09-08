@@ -300,6 +300,86 @@ déposées et date de dernière connexion. Lecture seule, pas de gestion de
 rôle (l'admin reste un compte séparé, voir plus bas — jamais question
 qu'un élève devienne admin).
 
+**Aperçu des PDF/photos (demandé le 9 septembre 2026)** : jusque-là, le
+seul clic possible sur un document ou une note photo/PDF forçait un
+téléchargement (`Content-Disposition: attachment`) — pas de moyen de le
+voir sans le sauvegarder. Ajouté : `GET /api/documents/{id}/apercu` et
+`GET /api/notes/{id}/apercu`, qui servent le même fichier avec
+`Content-Disposition: inline` (paramètre `content_disposition_type`
+de `FileResponse`, Starlette) — le PDF/l'image s'ouvre nativement dans
+le navigateur (nouvel onglet) au lieu d'être proposé au téléchargement.
+Les endpoints `/fichier` existants sont inchangés (téléchargement forcé,
+conservés pour un bouton dédié). Factorisé dans `_reponse_fichier` (
+`BackEnd/app/main.py`). Frontend : la ligne de document a maintenant deux
+actions séparées (nom cliquable = aperçu, icône = téléchargement, cette
+dernière masquée pour les liens externes) ; chaque note photo/PDF a une
+petite icône "voir le fichier d'origine" à côté de sa date. Vérifié en
+navigateur réel (l'onglet ouvert affiche bien l'image nativement,
+titré "apercu (1×1)" par Chromium, pas une boîte de dialogue de
+téléchargement).
+
+**Remarque de Cédric à surveiller** : il a signalé un même PDF présent
+sur 2 cours différents d'une matière. Le dédoublonnage (`_dedupe_blob`,
+voir ci-dessus) ne s'applique qu'aux fichiers téléchargés *après* son
+déploiement — si ce doublon date d'avant, les deux copies existent
+toujours séparément sur le disque et ne seront pas fusionnées
+automatiquement. Pas de script de nettoyage rétroactif écrit (pas
+demandé) — à proposer si Cédric veut récupérer l'espace disque.
+
+## État — fonctionnel et testé (suite du 9 septembre 2026 : suivi détaillé + IA)
+
+**Étapes détaillées dans "Traitements"** (demandé : "il me manque les
+différentes étapes et leur résultats, ex. utilisation de pdftotext").
+`db.log_traitement` (`Services/db.py`) expose maintenant `ctx.etape(label,
+statut=, detail=, duree_ms=, moteur=)`, appelable plusieurs fois pendant
+un même traitement — stocké en JSON dans la nouvelle colonne
+`traitements.etapes`, visible même si le traitement échoue en cours de
+route (utile pour savoir jusqu'où il est allé). Appliqué partout :
+- OCR document PDF : étape `pdftotext` puis, si bascule nécessaire,
+  `détection` (pourquoi) puis une étape `ocr page N/M` par page.
+- OCR note (photo/PDF) : une étape par page.
+- Synchro Pronote : étapes `connexion`, `cours`, `devoirs`.
+- Génération IA : étapes `lecture du contenu source`, `appel Ollama`,
+  `extraction résumés/flashcards/quiz`.
+**Piège rencontré** : ne jamais dupliquer le nom du moteur à la fois dans
+le libellé de l'étape et via le paramètre `moteur=` — le frontend affiche
+déjà `(moteur)` automatiquement à côté du libellé.
+
+**Rendu "pretty" du résultat** (JSON / XML / Markdown) : `ResultatFormatte`
+dans `FrontEnd/src/App.jsx` détecte le format et l'affiche en conséquence
+— JSON réindenté, XML indenté, Markdown rendu via `MarkdownLite` (titres,
+gras/italique, listes, tableaux). Rendu **par éléments React, jamais
+`dangerouslySetInnerHTML`** : un texte hostile transcrit depuis une photo
+reste inerte, aucun risque d'injection. Pas de nouvelle dépendance npm.
+
+**Temps écoulé** : dates reformatées avec "à" entre date et heure
+(`formatDateHeure`), durée en `ms` convertie en "X min Y s" / "X h Y min"
+(`formatDuree`). Un traitement `en_cours` affiche un **chrono en direct**
+(`useNow`, tick 1s) — utile pour les générations IA qui peuvent tourner
+~30 min, pour distinguer "ça tourne encore" de "ça a planté".
+
+**Résumés multiples selon la taille du cours** : le prompt Ollama demande
+désormais `resume_court` (2-4 phrases) et `resume_detaille` (longueur
+proportionnelle au contenu source, pour ne pas perdre d'éléments
+importants sur un gros cours). Stockés dans `cours.ia_resume` (court,
+même colonne qu'avant) et la nouvelle colonne `cours.ia_resume_detaille`.
+Frontend : résumé court affiché par défaut, bouton "Voir le résumé
+détaillé" pour basculer.
+
+**Compléter les flashcards/quiz (+10)** sans tout régénérer :
+`ia_generation.completer_pour_cours` (nouveau, type `ia_completion` dans
+`traitements`) envoie à Ollama la liste des questions déjà utilisées
+(pour éviter les répétitions) et ajoute le résultat aux tableaux
+existants — le résumé n'est pas touché. `POST /api/cours/{id}/completer`
+(même garde-fou `en_cours` posé de façon synchrone que `/generer`).
+**Bug trouvé et corrigé pendant la vérification navigateur** : un échec
+de complément faisait disparaître tout le contenu déjà généré (l'écran
+bastardait sur `ia_statut === 'echec'`, qui masquait résumé/flashcards/
+quiz existants). Corrigé : la condition d'affichage se base sur la
+présence de `ia_resume` plutôt que sur `ia_statut`, avec un message
+d'erreur discret sous les boutons si la dernière tentative a échoué —
+le contenu précédent reste toujours visible.
+
 ## État — pas commencé
 
 - **Exposition hors LAN** (nom de domaine + HTTPS + reverse proxy) —
@@ -317,6 +397,17 @@ qu'un élève devienne admin).
   d'appairage — Google Authenticator/Authy compatibles). S'ajoute au
   mot de passe `ADMIN_PASSWORD` déjà en place (`Services/config.py`,
   `POST /auth/admin-login`), ne le remplace pas.
+- **Outil admin de recherche de doublons** (demandé le 9 septembre 2026,
+  pas encore implémenté) : un bouton dans l'écran admin qui scanne
+  `data/documents/` (ou la table `documents` par empreinte sha256, voir
+  `_dedupe_blob` dans `pronote_sync.py`) et propose, pour chaque doublon
+  trouvé, une comparaison (aperçu des deux fichiers/cours concernés) puis
+  un choix : suppression totale (fichier + ligne `documents`), suppression
+  partielle (fichier physique seulement, en reliant la ligne restante vers
+  l'exemplaire conservé), ou repointer `chemin_local` d'un doublon vers
+  l'autre sans rien supprimer. Sert notamment à nettoyer les doublons
+  antérieurs au dédoublonnage automatique (celui-ci ne s'applique qu'aux
+  fichiers téléchargés après son déploiement, voir plus haut).
 
 ## Bugs déjà rencontrés et corrigés (ne pas réintroduire)
 

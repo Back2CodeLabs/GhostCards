@@ -13,11 +13,12 @@ raisonnement intermédiaire de qwen3 (qui polluerait la réponse).
 Le résultat est stocké directement sur la ligne `cours` (colonnes `ia_*`,
 voir Services/db.py::init_db) plutôt que dans une table séparée : une
 génération remplace la précédente, il n'y a pas besoin d'historique des
-contenus eux-mêmes (l'historique des *tentatives* reste dans
-`traitements`, comme pour l'OCR).
+contenus eux-mêmes (l'historique des *tentatives*, avec le détail de
+chaque étape, reste dans `traitements`, comme pour l'OCR).
 """
 import json
 import logging
+import time
 import urllib.error
 import urllib.request
 
@@ -32,6 +33,10 @@ from .config import (
 
 log = logging.getLogger("ghostcards.ia_generation")
 
+# Nombre de flashcards/questions ajoutées par un clic sur "+ 10" une fois
+# une génération déjà en place (voir completer_pour_cours).
+N_COMPLEMENT = 10
+
 
 class GenerationError(Exception):
     pass
@@ -40,14 +45,34 @@ class GenerationError(Exception):
 PROMPT_TEMPLATE = """{texte}
 
 À partir de ce cours, produis :
-1. Un résumé clair et structuré (quelques phrases à quelques paragraphes).
-2. Exactement {nb_flashcards} flashcards de révision (question courte, réponse courte,
+1. Un résumé COURT (2 à 4 phrases, l'essentiel seulement).
+2. Un résumé DÉTAILLÉ, dont la longueur doit être proportionnelle à la
+   longueur du cours ci-dessus (plus le cours est long/dense, plus ce
+   résumé doit être développé) — ne sacrifie pas les éléments importants
+   juste pour rester court.
+3. Exactement {nb_flashcards} flashcards de révision (question courte, réponse courte,
    1 phrase maximum).
-3. Exactement {nb_quiz} questions de quiz à choix multiple (4 options, une seule correcte).
+4. Exactement {nb_quiz} questions de quiz à choix multiple (4 options, une seule correcte).
 
 Réponds UNIQUEMENT avec un JSON valide, rien d'autre, dans ce format exact, en français,
 sans markdown ni texte avant ou après le JSON :
-{{"resume": "...", "flashcards": [{{"question": "...", "reponse": "..."}}], "quiz": [{{"question": "...", "options": ["...", "...", "...", "..."], "reponse_index": 0}}]}}
+{{"resume_court": "...", "resume_detaille": "...", "flashcards": [{{"question": "...", "reponse": "..."}}], "quiz": [{{"question": "...", "options": ["...", "...", "...", "..."], "reponse_index": 0}}]}}
+"""
+
+PROMPT_COMPLEMENT_TEMPLATE = """{texte}
+
+Voici les questions déjà utilisées pour ce cours (à ne pas répéter à l'identique) :
+Flashcards existantes : {questions_flashcards}
+Quiz existant : {questions_quiz}
+
+Génère {n} NOUVELLES flashcards de révision (différentes des précédentes,
+question courte / réponse courte, 1 phrase maximum) et {n} NOUVELLES
+questions de quiz à choix multiple (4 options, une seule correcte,
+différentes des précédentes), à partir de ce même cours.
+
+Réponds UNIQUEMENT avec un JSON valide, rien d'autre, dans ce format exact,
+en français, sans markdown ni texte avant ou après le JSON :
+{{"flashcards": [{{"question": "...", "reponse": "..."}}], "quiz": [{{"question": "...", "options": ["...", "...", "...", "..."], "reponse_index": 0}}]}}
 """
 
 
@@ -92,7 +117,7 @@ def _texte_source(conn, cours: dict) -> str:
 
 
 def generer_pour_cours(cours_id: int) -> None:
-    """Génère résumé/flashcards/quiz pour un cours et les enregistre sur la ligne `cours`."""
+    """Génère résumés (court + détaillé)/flashcards/quiz pour un cours et les enregistre sur la ligne `cours`."""
     with db.session() as conn:
         row = conn.execute("SELECT * FROM cours WHERE id = ?", (cours_id,)).fetchone()
         if row is None:
@@ -121,7 +146,16 @@ def generer_pour_cours(cours_id: int) -> None:
     try:
         with db.log_traitement("ia_generation", "cours", cours_id) as ctx:
             ctx.moteur = OLLAMA_MODEL
+            ctx.etape("lecture du contenu source", detail=f"{len(texte)} caractère(s) (description + documents transcrits)")
+
+            t0 = time.monotonic()
             resultat = _appeler_ollama(prompt)
+            ctx.etape("appel Ollama", moteur=OLLAMA_MODEL, duree_ms=int((time.monotonic() - t0) * 1000),
+                       detail="format=json, think=false")
+
+            nb_fc = len(resultat.get("flashcards", []))
+            nb_q = len(resultat.get("quiz", []))
+            ctx.etape("extraction résumés/flashcards/quiz", detail=f"{nb_fc} flashcard(s), {nb_q} question(s) de quiz")
             ctx.resultat = json.dumps(resultat, ensure_ascii=False)[:4000]
     except Exception as e:  # noqa: BLE001 — déjà journalisé dans `traitements` par db.log_traitement
         with db.session() as conn:
@@ -131,12 +165,70 @@ def generer_pour_cours(cours_id: int) -> None:
     with db.session() as conn:
         conn.execute(
             """UPDATE cours
-               SET ia_statut = 'pret', ia_resume = ?, ia_flashcards = ?, ia_quiz = ?, ia_erreur = NULL
+               SET ia_statut = 'pret', ia_resume = ?, ia_resume_detaille = ?, ia_flashcards = ?, ia_quiz = ?, ia_erreur = NULL
                WHERE id = ?""",
             (
-                resultat.get("resume", ""),
+                resultat.get("resume_court", resultat.get("resume", "")),
+                resultat.get("resume_detaille", ""),
                 json.dumps(resultat.get("flashcards", []), ensure_ascii=False),
                 json.dumps(resultat.get("quiz", []), ensure_ascii=False),
+                cours_id,
+            ),
+        )
+
+
+def completer_pour_cours(cours_id: int, n: int = N_COMPLEMENT) -> None:
+    """
+    Ajoute `n` flashcards et `n` questions de quiz supplémentaires à une
+    génération déjà en place (bouton "+ 10" côté frontend), sans toucher
+    au résumé ni aux flashcards/quiz déjà générés — juste un complément.
+    """
+    with db.session() as conn:
+        row = conn.execute("SELECT * FROM cours WHERE id = ?", (cours_id,)).fetchone()
+        if row is None:
+            raise GenerationError(f"Cours {cours_id} introuvable")
+        cours = dict(row)
+        # On se base sur la présence de contenu existant, pas sur ia_statut :
+        # l'endpoint met déjà ia_statut à 'en_cours' avant d'appeler cette
+        # fonction, et une relance depuis un complément en échec doit rester
+        # possible (ia_statut vaudrait alors 'echec').
+        if not cours.get("ia_flashcards"):
+            raise GenerationError("Génère d'abord le résumé/flashcards/quiz avant de les compléter.")
+        texte = _texte_source(conn, cours)
+        flashcards_existantes = json.loads(cours["ia_flashcards"]) if cours["ia_flashcards"] else []
+        quiz_existant = json.loads(cours["ia_quiz"]) if cours["ia_quiz"] else []
+        conn.execute("UPDATE cours SET ia_statut = 'en_cours' WHERE id = ?", (cours_id,))
+
+    prompt = PROMPT_COMPLEMENT_TEMPLATE.format(
+        texte=texte, n=n,
+        questions_flashcards="; ".join(c["question"] for c in flashcards_existantes) or "(aucune)",
+        questions_quiz="; ".join(q["question"] for q in quiz_existant) or "(aucune)",
+    )
+
+    try:
+        with db.log_traitement("ia_completion", "cours", cours_id) as ctx:
+            ctx.moteur = OLLAMA_MODEL
+            ctx.etape("lecture de l'existant", detail=f"{len(flashcards_existantes)} flashcard(s), {len(quiz_existant)} question(s) déjà en place")
+
+            t0 = time.monotonic()
+            resultat = _appeler_ollama(prompt)
+            ctx.etape("appel Ollama", moteur=OLLAMA_MODEL, duree_ms=int((time.monotonic() - t0) * 1000))
+
+            nouvelles_fc = resultat.get("flashcards", [])
+            nouvelles_q = resultat.get("quiz", [])
+            ctx.etape("fusion avec l'existant", detail=f"+{len(nouvelles_fc)} flashcard(s), +{len(nouvelles_q)} question(s)")
+            ctx.resultat = json.dumps(resultat, ensure_ascii=False)[:4000]
+    except Exception as e:  # noqa: BLE001 — déjà journalisé dans `traitements` par db.log_traitement
+        with db.session() as conn:
+            conn.execute("UPDATE cours SET ia_statut = 'echec', ia_erreur = ? WHERE id = ?", (str(e), cours_id))
+        return
+
+    with db.session() as conn:
+        conn.execute(
+            "UPDATE cours SET ia_statut = 'pret', ia_flashcards = ?, ia_quiz = ?, ia_erreur = NULL WHERE id = ?",
+            (
+                json.dumps(flashcards_existantes + nouvelles_fc, ensure_ascii=False),
+                json.dumps(quiz_existant + nouvelles_q, ensure_ascii=False),
                 cours_id,
             ),
         )

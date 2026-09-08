@@ -282,6 +282,26 @@ def generer_contenu_ia(cours_id: int, background_tasks: BackgroundTasks):
     return {"status": "generation_lancee"}
 
 
+@app.post("/api/cours/{cours_id}/completer")
+def completer_contenu_ia(cours_id: int, background_tasks: BackgroundTasks):
+    """
+    Ajoute 10 flashcards et 10 questions de quiz de plus à une génération
+    déjà en place (Services/ia_generation.py::completer_pour_cours), sans
+    tout régénérer. Nécessite qu'une génération ait déjà réussi.
+    """
+    with db.session() as conn:
+        cours = conn.execute("SELECT ia_statut, ia_flashcards FROM cours WHERE id = ?", (cours_id,)).fetchone()
+        if cours is None:
+            raise HTTPException(404, "Cours introuvable")
+        if cours["ia_statut"] == "en_cours":
+            return {"status": "deja_en_cours"}
+        if not cours["ia_flashcards"]:
+            raise HTTPException(400, "Génère d'abord le résumé/flashcards/quiz avant de les compléter.")
+        conn.execute("UPDATE cours SET ia_statut = 'en_cours' WHERE id = ?", (cours_id,))
+    background_tasks.add_task(ia_generation.completer_pour_cours, cours_id)
+    return {"status": "completion_lancee"}
+
+
 class NoteCreate(BaseModel):
     contenu: str
     type: str = "texte"  # 'texte' | 'markdown' — photo/PDF pas encore pris en charge
@@ -354,6 +374,14 @@ def create_note_photo(cours_id: int, request: Request, background_tasks: Backgro
     return {"ok": True, "note_id": note_id}
 
 
+def _traitement_vers_dict(row) -> dict:
+    d = dict(row)
+    # etapes est stocké en JSON texte (voir Services/db.py::log_traitement) :
+    # décodé ici pour que le frontend reçoive une vraie liste, pas une chaîne.
+    d["etapes"] = json.loads(d["etapes"]) if d.get("etapes") else []
+    return d
+
+
 @app.get("/api/traitements")
 def list_traitements(request: Request, limit: int = 50):
     _require_admin(request)
@@ -361,7 +389,7 @@ def list_traitements(request: Request, limit: int = 50):
         rows = conn.execute(
             "SELECT * FROM traitements ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_traitement_vers_dict(r) for r in rows]
 
 
 @app.get("/api/traitements/{traitement_id}")
@@ -371,7 +399,7 @@ def get_traitement(traitement_id: int, request: Request):
         row = conn.execute("SELECT * FROM traitements WHERE id = ?", (traitement_id,)).fetchone()
         if row is None:
             raise HTTPException(404, "Traitement introuvable")
-        return dict(row)
+        return _traitement_vers_dict(row)
 
 
 @app.post("/api/traitements/{traitement_id}/relancer")
@@ -409,16 +437,58 @@ def list_devoirs():
         return [dict(r) for r in rows]
 
 
+def _reponse_fichier(chemin_local: str | None, nom_fichier: str, *, inline: bool) -> FileResponse:
+    """
+    Sert un fichier stocké sur le disque, en téléchargement forcé
+    (`inline=False`, utilisé par les boutons "Télécharger") ou affichable
+    directement dans le navigateur (`inline=True`, PDF/image ouverts dans
+    un nouvel onglet plutôt que proposés en téléchargement).
+    """
+    if not chemin_local or chemin_local.startswith("lien:"):
+        raise HTTPException(404, "Fichier non disponible localement")
+    path = DOCUMENTS_DIR.parent / chemin_local
+    if not path.exists():
+        raise HTTPException(404, "Fichier absent du disque")
+    return FileResponse(
+        path, filename=nom_fichier,
+        content_disposition_type="inline" if inline else "attachment",
+    )
+
+
 @app.get("/api/documents/{document_id}/fichier")
 def download_document(document_id: int):
     with db.session() as conn:
         doc = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
-        if doc is None or not doc["chemin_local"] or doc["chemin_local"].startswith("lien:"):
-            raise HTTPException(404, "Fichier non disponible localement")
-        path = DOCUMENTS_DIR.parent / doc["chemin_local"]
-        if not path.exists():
-            raise HTTPException(404, "Fichier absent du disque")
-        return FileResponse(path, filename=doc["nom_fichier"])
+        if doc is None:
+            raise HTTPException(404, "Document introuvable")
+    return _reponse_fichier(doc["chemin_local"], doc["nom_fichier"], inline=False)
+
+
+@app.get("/api/documents/{document_id}/apercu")
+def apercu_document(document_id: int):
+    with db.session() as conn:
+        doc = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
+        if doc is None:
+            raise HTTPException(404, "Document introuvable")
+    return _reponse_fichier(doc["chemin_local"], doc["nom_fichier"], inline=True)
+
+
+@app.get("/api/notes/{note_id}/fichier")
+def download_note_fichier(note_id: int):
+    with db.session() as conn:
+        note = conn.execute("SELECT * FROM notes_eleves WHERE id = ?", (note_id,)).fetchone()
+        if note is None:
+            raise HTTPException(404, "Note introuvable")
+    return _reponse_fichier(note["chemin_fichier"], f"note_{note_id}{Path(note['chemin_fichier'] or '').suffix}", inline=False)
+
+
+@app.get("/api/notes/{note_id}/apercu")
+def apercu_note_fichier(note_id: int):
+    with db.session() as conn:
+        note = conn.execute("SELECT * FROM notes_eleves WHERE id = ?", (note_id,)).fetchone()
+        if note is None:
+            raise HTTPException(404, "Note introuvable")
+    return _reponse_fichier(note["chemin_fichier"], f"note_{note_id}{Path(note['chemin_fichier'] or '').suffix}", inline=True)
 
 
 _anthropic_client = None

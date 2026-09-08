@@ -16,6 +16,7 @@ import base64
 import logging
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from . import db
@@ -196,29 +197,53 @@ def transcribe_document(document_id: int) -> None:
 
 
 def _transcrire_pdf_document(document_id: int, path: Path) -> None:
-    with _log_traitement("pdftotext", "document", document_id) as ctx:
-        ctx.moteur = "pdftotext"
+    with _log_traitement("transcription_document", "document", document_id) as ctx:
+        t0 = time.monotonic()
         texte = extract_pdf_text(path)
-        ctx.resultat = texte
+        num_pages = count_pdf_pages(path)
+        ctx.etape(
+            "pdftotext", moteur="pdftotext",
+            detail=f"{len(texte.strip())} caractère(s) extrait(s) sur {num_pages} page(s)",
+            duree_ms=int((time.monotonic() - t0) * 1000),
+        )
 
-    if not is_text_sparse(texte, count_pdf_pages(path)):
-        _enregistrer_texte_document(document_id, texte)
-        return
+        if not is_text_sparse(texte, num_pages):
+            ctx.moteur = "pdftotext"
+            ctx.resultat = texte
+        else:
+            ctx.etape(
+                "détection", statut="info",
+                detail=f"texte jugé trop pauvre (seuil 40 caractères/page) — bascule sur l'OCR ({OCR_ENGINE})",
+            )
+            with tempfile.TemporaryDirectory() as tmp:
+                images = pdf_to_images(path, Path(tmp))
+                morceaux = []
+                for i, img in enumerate(images, start=1):
+                    t1 = time.monotonic()
+                    texte_page = _ocr_engine_fn()(img)
+                    morceaux.append(texte_page)
+                    ctx.etape(
+                        f"ocr page {i}/{len(images)}", moteur=OCR_ENGINE,
+                        detail=f"{len(texte_page.strip())} caractère(s) extrait(s)",
+                        duree_ms=int((time.monotonic() - t1) * 1000),
+                    )
+            texte = "\n\n".join(m for m in morceaux if m)
+            ctx.moteur = OCR_ENGINE
+            ctx.resultat = texte
 
-    with _log_traitement("ocr_document", "document", document_id) as ctx:
-        ctx.moteur = OCR_ENGINE
-        with tempfile.TemporaryDirectory() as tmp:
-            images = pdf_to_images(path, Path(tmp))
-            morceaux = [_ocr_engine_fn()(img) for img in images]
-        texte_ocr = "\n\n".join(m for m in morceaux if m)
-        ctx.resultat = texte_ocr
-    _enregistrer_texte_document(document_id, texte_ocr)
+    _enregistrer_texte_document(document_id, texte)
 
 
 def _transcrire_image_document(document_id: int, path: Path) -> None:
-    with _log_traitement("ocr_document", "document", document_id) as ctx:
-        ctx.moteur = OCR_ENGINE
+    with _log_traitement("transcription_document", "document", document_id) as ctx:
+        t0 = time.monotonic()
         texte = _ocr_engine_fn()(path)
+        ctx.etape(
+            "ocr", moteur=OCR_ENGINE,
+            detail=f"{len(texte.strip())} caractère(s) extrait(s)",
+            duree_ms=int((time.monotonic() - t0) * 1000),
+        )
+        ctx.moteur = OCR_ENGINE
         ctx.resultat = texte
     _enregistrer_texte_document(document_id, texte)
 
@@ -242,15 +267,30 @@ def transcribe_note(note_id: int) -> None:
         return
 
     try:
-        with _log_traitement("ocr_note", "note", note_id) as ctx:
+        with _log_traitement("transcription_note", "note", note_id) as ctx:
             ctx.moteur = OCR_ENGINE
             if path.suffix.lower() == ".pdf":
                 with tempfile.TemporaryDirectory() as tmp:
                     images = pdf_to_images(path, Path(tmp))
-                    morceaux = [_ocr_engine_fn()(img) for img in images]
+                    morceaux = []
+                    for i, img in enumerate(images, start=1):
+                        t0 = time.monotonic()
+                        texte_page = _ocr_engine_fn()(img)
+                        morceaux.append(texte_page)
+                        ctx.etape(
+                            f"ocr page {i}/{len(images)}", moteur=OCR_ENGINE,
+                            detail=f"{len(texte_page.strip())} caractère(s) extrait(s)",
+                            duree_ms=int((time.monotonic() - t0) * 1000),
+                        )
                 texte = "\n\n".join(m for m in morceaux if m)
             else:
+                t0 = time.monotonic()
                 texte = _ocr_engine_fn()(path)
+                ctx.etape(
+                    "ocr", moteur=OCR_ENGINE,
+                    detail=f"{len(texte.strip())} caractère(s) extrait(s)",
+                    duree_ms=int((time.monotonic() - t0) * 1000),
+                )
             ctx.resultat = texte
     except Exception as e:  # noqa: BLE001 — déjà journalisé dans `traitements` par _log_traitement
         _marquer_note_echec(note_id, str(e))
@@ -263,7 +303,7 @@ def transcribe_note(note_id: int) -> None:
 def relancer_traitement(traitement_id: int) -> None:
     """Relit un traitement existant et refait le travail pour sa cible (nouvelle ligne d'historique)."""
     with db.session() as conn:
-        row = conn.execute("SELECT cible_type, cible_id FROM traitements WHERE id = ?", (traitement_id,)).fetchone()
+        row = conn.execute("SELECT type, cible_type, cible_id FROM traitements WHERE id = ?", (traitement_id,)).fetchone()
     if row is None:
         raise OcrError(f"Traitement {traitement_id} introuvable")
 
@@ -276,4 +316,7 @@ def relancer_traitement(traitement_id: int) -> None:
         pronote_sync.sync()
     elif row["cible_type"] == "cours":
         from . import ia_generation  # idem
-        ia_generation.generer_pour_cours(row["cible_id"])
+        if row["type"] == "ia_completion":
+            ia_generation.completer_pour_cours(row["cible_id"])
+        else:
+            ia_generation.generer_pour_cours(row["cible_id"])

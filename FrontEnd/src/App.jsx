@@ -495,6 +495,9 @@ function CoursDetail({ coursId, onBack, me, onRequireLogin }) {
 
   const [generating, setGenerating] = useState(false);
   const [generationError, setGenerationError] = useState(null);
+  const [completing, setCompleting] = useState(false);
+  const [completingError, setCompletingError] = useState(null);
+  const [resumeDetaille, setResumeDetaille] = useState(false);
 
   // Tant qu'une note déposée en photo/PDF est en cours de transcription
   // (OCR en arrière-plan, voir Services/ocr.py) ou que la génération IA
@@ -524,6 +527,24 @@ function CoursDetail({ coursId, onBack, me, onRequireLogin }) {
       setGenerationError(e.message || "Impossible de lancer la génération.");
     } finally {
       setGenerating(false);
+    }
+  }
+
+  async function completerIA() {
+    if (completing) return;
+    setCompleting(true);
+    setCompletingError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/cours/${coursId}/completer`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Erreur ${res.status}`);
+      }
+      cours.reload();
+    } catch (e) {
+      setCompletingError(e.message || "Impossible de lancer le complément.");
+    } finally {
+      setCompleting(false);
     }
   }
 
@@ -601,17 +622,23 @@ function CoursDetail({ coursId, onBack, me, onRequireLogin }) {
         )}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {c.documents.map((d) => (
-            <a
-              key={d.id}
-              href={d.url_externe || `${API_BASE}/api/documents/${d.id}/fichier`}
-              target="_blank"
-              rel="noreferrer"
-              style={{ display: "flex", alignItems: "center", gap: 10, background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "11px 14px", textDecoration: "none" }}
-            >
-              <FileText size={16} color={C.haunt} />
-              <span style={{ flex: 1, fontFamily: uiFont, fontSize: 13, color: C.ink }}>{d.nom_fichier}</span>
-              <Download size={15} color={C.inkFaint} />
-            </a>
+            <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 10, background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "11px 14px" }}>
+              <a
+                href={d.url_externe || `${API_BASE}/api/documents/${d.id}/apercu`}
+                target="_blank"
+                rel="noreferrer"
+                title="Voir"
+                style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 10, textDecoration: "none" }}
+              >
+                <FileText size={16} color={C.haunt} style={{ flexShrink: 0 }} />
+                <span style={{ flex: 1, minWidth: 0, fontFamily: uiFont, fontSize: 13, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.nom_fichier}</span>
+              </a>
+              {!d.url_externe && (
+                <a href={`${API_BASE}/api/documents/${d.id}/fichier`} title="Télécharger" style={{ flexShrink: 0, display: "flex", color: C.inkFaint }}>
+                  <Download size={15} />
+                </a>
+              )}
+            </div>
           ))}
         </div>
 
@@ -626,9 +653,22 @@ function CoursDetail({ coursId, onBack, me, onRequireLogin }) {
             <div key={n.id} style={{ background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "11px 14px" }}>
               <div className="flex items-center justify-between">
                 <span style={{ fontFamily: uiFont, fontSize: 12.5, fontWeight: 700, color: C.haunt }}>{n.auteur}</span>
-                <span style={{ fontFamily: uiFont, fontSize: 11, color: C.inkFaint }}>
-                  {new Date(n.created_at).toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}
-                </span>
+                <div className="flex items-center gap-2">
+                  {n.type !== "texte" && n.type !== "markdown" && (
+                    <a
+                      href={`${API_BASE}/api/notes/${n.id}/apercu`}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="Voir le fichier d'origine"
+                      style={{ display: "flex", color: C.inkFaint }}
+                    >
+                      <FileText size={14} />
+                    </a>
+                  )}
+                  <span style={{ fontFamily: uiFont, fontSize: 11, color: C.inkFaint }}>
+                    {new Date(n.created_at).toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}
+                  </span>
+                </div>
               </div>
               {n.statut === "traitement" && (
                 <p style={{ fontFamily: uiFont, fontSize: 13, color: C.inkFaint, margin: "4px 0 0", display: "flex", alignItems: "center", gap: 6 }}>
@@ -690,11 +730,21 @@ function CoursDetail({ coursId, onBack, me, onRequireLogin }) {
           </button>
         )}
 
-        {c.ia_statut === "pret" ? (
+        {c.ia_resume ? (
           <div style={{ marginTop: 22 }}>
             <p style={{ fontFamily: uiFont, fontSize: 11.5, fontWeight: 700, color: C.inkFaint, letterSpacing: 0.3, margin: "0 0 8px" }}>RÉSUMÉ IA</p>
             <div style={{ background: C.white, border: `1px solid ${C.line}`, borderRadius: 12, padding: 16 }}>
-              <p style={{ fontFamily: uiFont, fontSize: 14, color: C.ink, lineHeight: 1.55, margin: 0, whiteSpace: "pre-wrap" }}>{c.ia_resume}</p>
+              <p style={{ fontFamily: uiFont, fontSize: 14, color: C.ink, lineHeight: 1.55, margin: 0, whiteSpace: "pre-wrap" }}>
+                {resumeDetaille && c.ia_resume_detaille ? c.ia_resume_detaille : c.ia_resume}
+              </p>
+              {c.ia_resume_detaille && c.ia_resume_detaille !== c.ia_resume && (
+                <button
+                  onClick={() => setResumeDetaille((v) => !v)}
+                  style={{ marginTop: 10, background: "transparent", border: "none", color: C.haunt, fontFamily: uiFont, fontSize: 12.5, fontWeight: 700, cursor: "pointer", padding: 0 }}
+                >
+                  {resumeDetaille ? "Voir le résumé court" : "Voir le résumé détaillé"}
+                </button>
+              )}
             </div>
 
             {c.ia_flashcards.length > 0 && (
@@ -723,14 +773,34 @@ function CoursDetail({ coursId, onBack, me, onRequireLogin }) {
               </>
             )}
 
-            <button
-              onClick={genererIA}
-              disabled={generating}
-              style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 8, background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "9px 16px", fontFamily: uiFont, fontSize: 12.5, fontWeight: 600, color: C.inkSoft, cursor: generating ? "default" : "pointer" }}
-            >
-              <RefreshCw size={13} style={generating ? { animation: "spin 1s linear infinite" } : {}} /> Régénérer
-            </button>
+            <div className="flex items-center gap-2" style={{ marginTop: 16 }}>
+              <button
+                onClick={completerIA}
+                disabled={completing || c.ia_statut === "en_cours"}
+                style={{ display: "flex", alignItems: "center", gap: 8, background: C.haunt, color: C.onAccent, border: "none", borderRadius: 10, padding: "9px 16px", fontFamily: uiFont, fontSize: 12.5, fontWeight: 700, cursor: completing ? "default" : "pointer", opacity: completing ? 0.7 : 1 }}
+              >
+                <Sparkles size={13} /> {completing ? "Lancement…" : "+ 10 flashcards & quiz"}
+              </button>
+              <button
+                onClick={genererIA}
+                disabled={generating || c.ia_statut === "en_cours"}
+                style={{ display: "flex", alignItems: "center", gap: 8, background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "9px 16px", fontFamily: uiFont, fontSize: 12.5, fontWeight: 600, color: C.inkSoft, cursor: generating ? "default" : "pointer" }}
+              >
+                <RefreshCw size={13} style={generating ? { animation: "spin 1s linear infinite" } : {}} /> Régénérer
+              </button>
+            </div>
+            {c.ia_statut === "en_cours" && (
+              <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: "8px 0 0", display: "flex", alignItems: "center", gap: 6 }}>
+                <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> Mise à jour en cours… (le contenu ci-dessus reste celui de la dernière génération réussie)
+              </p>
+            )}
+            {c.ia_statut === "echec" && c.ia_erreur && (
+              <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.brick, margin: "8px 0 0" }}>
+                La dernière tentative a échoué ({c.ia_erreur}) — le contenu ci-dessus reste celui d'avant.
+              </p>
+            )}
             {generationError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "8px 0 0" }}>{generationError}</p>}
+            {completingError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "8px 0 0" }}>{completingError}</p>}
           </div>
         ) : (
           <div style={{ marginTop: 22, background: C.hauntSoft, borderRadius: 12, padding: 16, display: "flex", gap: 12, alignItems: "flex-start" }}>
@@ -842,6 +912,36 @@ function traitementStatutInfo(C, statut) {
   return { label: "En cours", color: C.inkFaint, Icon: Loader2 };
 }
 
+function formatDateHeure(iso) {
+  const d = new Date(iso);
+  return `${d.toLocaleDateString("fr-FR")} à ${d.toLocaleTimeString("fr-FR")}`;
+}
+
+function formatDuree(ms) {
+  if (ms == null) return null;
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  if (m < 60) return `${m} min ${String(rs).padStart(2, "0")} s`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return `${h} h ${String(rm).padStart(2, "0")} min`;
+}
+
+// Fait tiquer un composant toutes les `intervalMs` tant que `active` est
+// vrai — utilisé pour afficher un temps écoulé en direct sur un
+// traitement en_cours (une génération IA peut tourner ~30 min).
+function useNow(active, intervalMs = 1000) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(t);
+  }, [active, intervalMs]);
+  return now;
+}
+
 function traitementTitre(t) {
   if (t.type === "pronote_sync") return "Synchronisation Pronote";
   return `${t.type} · ${t.cible_type} #${t.cible_id}`;
@@ -891,11 +991,163 @@ function TraitementsScreen({ onOpenTraitement }) {
   );
 }
 
+/* ------------------------------------------------------------------ */
+/* Rendu "pretty" du résultat d'un traitement (JSON / XML / Markdown    */
+/* léger / texte brut) — l'OCR et l'IA renvoient surtout du JSON ou du  */
+/* markdown, illisibles sans mise en forme dans un simple <pre>.        */
+/* Rendu par éléments React (jamais dangerouslySetInnerHTML) : même du  */
+/* texte hostile transcrit depuis une photo reste inerte, pas de risque */
+/* d'injection.                                                          */
+/* ------------------------------------------------------------------ */
+
+function detecterFormat(texte) {
+  const t = (texte || "").trim();
+  if (!t) return "texte";
+  try {
+    JSON.parse(t);
+    return "json";
+  } catch {
+    /* pas du JSON */
+  }
+  if (/^</.test(t) && /<\/[a-zA-Z][\w:-]*>\s*$/.test(t)) return "xml";
+  if (/^#{1,4}\s|^[-*]\s|\*\*[^*]+\*\*|^\|.+\|.*\|/m.test(t)) return "markdown";
+  return "texte";
+}
+
+function formatXml(xml) {
+  let formatted = "";
+  let pad = 0;
+  xml
+    .replace(/>\s*</g, ">\n<")
+    .split("\n")
+    .forEach((node) => {
+      if (!node.trim()) return;
+      let indentSuivant = 0;
+      if (/^<\/\w/.test(node)) pad = Math.max(pad - 1, 0);
+      else if (/^<\w[^>]*[^/]>/.test(node) && !/<\/\w[^>]*>\s*$/.test(node)) indentSuivant = 1;
+      formatted += "  ".repeat(pad) + node.trim() + "\n";
+      pad += indentSuivant;
+    });
+  return formatted.trim();
+}
+
+function renderInline(text, keyPrefix) {
+  const parts = [];
+  let rest = text;
+  let key = 0;
+  const re = /(\*\*[^*]+\*\*|\*[^*]+\*)/;
+  while (rest.length) {
+    const m = rest.match(re);
+    if (!m) {
+      parts.push(rest);
+      break;
+    }
+    if (m.index > 0) parts.push(rest.slice(0, m.index));
+    const token = m[0];
+    if (token.startsWith("**")) parts.push(<strong key={`${keyPrefix}-${key++}`}>{token.slice(2, -2)}</strong>);
+    else parts.push(<em key={`${keyPrefix}-${key++}`}>{token.slice(1, -1)}</em>);
+    rest = rest.slice(m.index + token.length);
+  }
+  return parts;
+}
+
+function MarkdownLite({ text }) {
+  const { C } = useTheme();
+  const lines = text.split("\n");
+  const blocks = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^#{1,4}\s/.test(line)) {
+      const niveau = line.match(/^#+/)[0].length;
+      const Titre = `h${Math.min(niveau + 3, 6)}`;
+      blocks.push(
+        <Titre key={i} style={{ fontFamily: uiFont, fontSize: 15 - niveau, fontWeight: 700, color: C.ink, margin: "10px 0 4px" }}>
+          {renderInline(line.replace(/^#+\s*/, ""), i)}
+        </Titre>
+      );
+      i++;
+    } else if (/^\|.+\|/.test(line) && lines[i + 1] && /^\|[\s:-]+\|/.test(lines[i + 1])) {
+      const entetes = line.split("|").map((c) => c.trim()).filter(Boolean);
+      let j = i + 2;
+      const lignes = [];
+      while (j < lines.length && /^\|.+\|/.test(lines[j])) {
+        lignes.push(lines[j].split("|").map((c) => c.trim()).filter(Boolean));
+        j++;
+      }
+      blocks.push(
+        <div key={i} style={{ overflowX: "auto", margin: "8px 0" }}>
+          <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12.5 }}>
+            <thead>
+              <tr>{entetes.map((h, k) => <th key={k} style={{ textAlign: "left", padding: "4px 8px", borderBottom: `1px solid ${C.line}`, color: C.inkFaint }}>{h}</th>)}</tr>
+            </thead>
+            <tbody>
+              {lignes.map((r, ri) => (
+                <tr key={ri}>{r.map((c, ci) => <td key={ci} style={{ padding: "4px 8px", borderBottom: `1px solid ${C.line}`, color: C.ink }}>{c}</td>)}</tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+      i = j;
+    } else if (/^[-*]\s/.test(line)) {
+      const items = [];
+      const debut = i;
+      while (i < lines.length && /^[-*]\s/.test(lines[i])) {
+        items.push(lines[i].replace(/^[-*]\s/, ""));
+        i++;
+      }
+      blocks.push(
+        <ul key={debut} style={{ margin: "4px 0", paddingLeft: 20 }}>
+          {items.map((it, k) => <li key={k} style={{ fontSize: 13.5, color: C.ink, marginBottom: 2 }}>{renderInline(it, `${debut}-${k}`)}</li>)}
+        </ul>
+      );
+    } else if (line.trim() === "") {
+      i++;
+    } else {
+      blocks.push(
+        <p key={i} style={{ fontSize: 13.5, color: C.ink, lineHeight: 1.55, margin: "4px 0" }}>{renderInline(line, i)}</p>
+      );
+      i++;
+    }
+  }
+  return <div style={{ fontFamily: uiFont }}>{blocks}</div>;
+}
+
+function ResultatFormatte({ texte }) {
+  const { C } = useTheme();
+  const format = detecterFormat(texte);
+  const preStyle = { margin: 0, fontFamily: "ui-monospace, Menlo, Consolas, monospace", fontSize: 12.5, color: C.ink, whiteSpace: "pre-wrap", wordBreak: "break-word" };
+
+  if (format === "json") {
+    let joli = texte;
+    try {
+      joli = JSON.stringify(JSON.parse(texte), null, 2);
+    } catch {
+      /* laissé tel quel si le JSON est tronqué (résultat coupé à 4000 caractères) */
+    }
+    return <pre style={preStyle}>{joli}</pre>;
+  }
+  if (format === "xml") return <pre style={preStyle}>{formatXml(texte)}</pre>;
+  if (format === "markdown") return <MarkdownLite text={texte} />;
+  return <p style={{ fontFamily: uiFont, fontSize: 13.5, color: C.ink, lineHeight: 1.55, margin: 0, whiteSpace: "pre-wrap" }}>{texte}</p>;
+}
+
 function TraitementDetail({ traitementId, onBack }) {
   const { C } = useTheme();
   const traitement = useApi(`/api/traitements/${traitementId}`, [traitementId]);
   const [relancing, setRelancing] = useState(false);
   const [relanceMsg, setRelanceMsg] = useState(null);
+  const enCours = traitement.data?.statut === "en_cours";
+  const now = useNow(enCours);
+
+  // Tant que le traitement tourne (une génération IA peut prendre jusqu'à
+  // ~30 min), on réactualise pour voir la fin sans recharger la page.
+  useEffect(() => {
+    if (!enCours) return;
+    const t = setInterval(() => traitement.reload(), 5000);
+    return () => clearInterval(t);
+  }, [enCours, traitement.reload]);
 
   async function relancer() {
     setRelancing(true);
@@ -919,6 +1171,9 @@ function TraitementDetail({ traitementId, onBack }) {
 
   const t = traitement.data;
   const { label, color, Icon } = traitementStatutInfo(C, t.statut);
+  const dureeAffichee = enCours
+    ? formatDuree(now - new Date(t.created_at).getTime())
+    : formatDuree(t.duree_ms);
 
   return (
     <div style={{ paddingBottom: 28 }}>
@@ -928,11 +1183,15 @@ function TraitementDetail({ traitementId, onBack }) {
           <Icon size={16} color={color} />
           <span style={{ fontFamily: uiFont, fontSize: 13.5, fontWeight: 700, color }}>{label}</span>
           {t.moteur && <span style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint }}>· moteur {t.moteur}</span>}
-          {t.duree_ms != null && <span style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint }}>· {t.duree_ms} ms</span>}
+          {dureeAffichee && (
+            <span style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint }}>
+              · {dureeAffichee}{enCours ? " (en cours…)" : ""}
+            </span>
+          )}
         </div>
         <p style={{ fontFamily: uiFont, fontSize: 12, color: C.inkFaint, margin: "6px 0 0" }}>
-          Lancé le {new Date(t.created_at).toLocaleString("fr-FR")}
-          {t.finished_at ? ` · terminé le ${new Date(t.finished_at).toLocaleString("fr-FR")}` : ""}
+          Lancé le {formatDateHeure(t.created_at)}
+          {t.finished_at ? ` · terminé le ${formatDateHeure(t.finished_at)}` : ""}
         </p>
 
         {t.erreur && (
@@ -942,10 +1201,41 @@ function TraitementDetail({ traitementId, onBack }) {
           </div>
         )}
 
+        {t.etapes && t.etapes.length > 0 && (
+          <>
+            <p style={{ fontFamily: uiFont, fontSize: 11.5, fontWeight: 700, color: C.inkFaint, letterSpacing: 0.3, margin: "20px 0 8px" }}>
+              ÉTAPES ({t.etapes.length})
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {t.etapes.map((e, i) => {
+                const info =
+                  e.statut === "echec" ? { color: C.brick, Icon: XCircle }
+                  : e.statut === "info" ? { color: C.inkFaint, Icon: Sparkles }
+                  : { color: C.spectral, Icon: CheckCircle2 };
+                return (
+                  <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8, background: C.white, border: `1px solid ${C.line}`, borderRadius: 8, padding: "8px 12px" }}>
+                    <info.Icon size={14} color={info.color} style={{ flexShrink: 0, marginTop: 2 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12.5, color: C.ink, fontWeight: 600 }}>
+                        {i + 1}. {e.label}
+                        {e.moteur && !e.label.toLowerCase().includes(e.moteur.toLowerCase()) ? ` (${e.moteur})` : ""}
+                      </div>
+                      {e.detail && <div style={{ fontSize: 12, color: C.inkSoft, marginTop: 2 }}>{e.detail}</div>}
+                    </div>
+                    {e.duree_ms != null && (
+                      <div style={{ fontSize: 11, color: C.inkFaint, flexShrink: 0, whiteSpace: "nowrap" }}>{formatDuree(e.duree_ms)}</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+
         {t.resultat && (
-          <div style={{ marginTop: 16, background: C.white, border: `1px solid ${C.line}`, borderRadius: 12, padding: 16 }}>
+          <div style={{ marginTop: 16, background: C.white, border: `1px solid ${C.line}`, borderRadius: 12, padding: 16, overflowX: "auto" }}>
             <p style={{ fontFamily: uiFont, fontSize: 11.5, fontWeight: 700, color: C.inkFaint, letterSpacing: 0.3, margin: "0 0 8px" }}>RÉSULTAT</p>
-            <p style={{ fontFamily: uiFont, fontSize: 13.5, color: C.ink, lineHeight: 1.55, margin: 0, whiteSpace: "pre-wrap" }}>{t.resultat}</p>
+            <ResultatFormatte texte={t.resultat} />
           </div>
         )}
 

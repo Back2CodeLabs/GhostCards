@@ -159,27 +159,43 @@ def sync(fetch_content: bool = True) -> dict:
     Journalisée dans `traitements` (type 'pronote_sync') comme les
     extractions OCR, pour que l'admin voie aussi l'historique des synchros
     (et puisse la relancer) depuis l'écran "Traitements" — même table,
-    mêmes endpoints, rien de plus à ajouter côté API/frontend.
+    mêmes endpoints, rien de plus à ajouter côté API/frontend. Le détail
+    par étape (connexion, cours, devoirs) est journalisé via
+    `db.log_traitement`, visible même si la synchro échoue en cours de
+    route (utile pour savoir jusqu'où elle est allée).
     """
     db.init_db()
     started_at = _now()
     counters = {"nouveaux_cours": 0, "nouveaux_devoirs": 0, "nouveaux_documents": 0}
     erreur = None
-    debut = time.monotonic()
-
-    with db.session() as conn:
-        traitement_id = db.creer_traitement(conn, type="pronote_sync", cible_type="sync", cible_id=0)
 
     try:
-        client = get_client()
-        date_from = date.today() - timedelta(days=SYNC_DAYS_BACK)
-        date_to = date.today() + timedelta(days=SYNC_DAYS_FORWARD)
+        with db.log_traitement("pronote_sync", "sync", 0) as ctx:
+            ctx.moteur = "pronotepy"
 
-        with db.session() as conn:
-            _sync_lessons(conn, client, date_from, date_to, fetch_content, counters)
-            _sync_homework(conn, client, date_from, date_to, counters)
+            t0 = time.monotonic()
+            client = get_client()
+            ctx.etape("connexion", detail="Connexion à Pronote (jeton pivoté)", duree_ms=int((time.monotonic() - t0) * 1000))
 
-    except Exception as e:  # noqa: BLE001 — on veut logger puis relancer proprement
+            date_from = date.today() - timedelta(days=SYNC_DAYS_BACK)
+            date_to = date.today() + timedelta(days=SYNC_DAYS_FORWARD)
+
+            t1 = time.monotonic()
+            with db.session() as conn:
+                _sync_lessons(conn, client, date_from, date_to, fetch_content, counters)
+            ctx.etape(
+                "cours",
+                detail=f"{counters['nouveaux_cours']} nouveau(x) cours, {counters['nouveaux_documents']} document(s) téléchargé(s)",
+                duree_ms=int((time.monotonic() - t1) * 1000),
+            )
+
+            t2 = time.monotonic()
+            with db.session() as conn:
+                _sync_homework(conn, client, date_from, date_to, counters)
+            ctx.etape("devoirs", detail=f"{counters['nouveaux_devoirs']} nouveau(x) devoir(s)", duree_ms=int((time.monotonic() - t2) * 1000))
+
+            ctx.resultat = f"{counters['nouveaux_cours']} nouveaux cours, {counters['nouveaux_devoirs']} devoirs, {counters['nouveaux_documents']} documents"
+    except Exception as e:  # noqa: BLE001 — déjà journalisé dans `traitements` par db.log_traitement
         log.exception("Échec de la synchronisation Pronote")
         erreur = str(e)
     finally:
@@ -188,12 +204,6 @@ def sync(fetch_content: bool = True) -> dict:
                 """INSERT INTO sync_log (started_at, finished_at, nouveaux_cours, nouveaux_devoirs, nouveaux_documents, erreur)
                    VALUES (?, ?, ?, ?, ?, ?)""",
                 (started_at, _now(), counters["nouveaux_cours"], counters["nouveaux_devoirs"], counters["nouveaux_documents"], erreur),
-            )
-        resultat = f"{counters['nouveaux_cours']} nouveaux cours, {counters['nouveaux_devoirs']} devoirs, {counters['nouveaux_documents']} documents"
-        with db.session() as conn:
-            db.terminer_traitement(
-                conn, traitement_id, statut="echec" if erreur else "succes", moteur="pronotepy",
-                resultat=resultat, erreur=erreur, duree_ms=int((time.monotonic() - debut) * 1000),
             )
 
     if erreur:

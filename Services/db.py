@@ -48,9 +48,13 @@ def init_db() -> None:
         # inclut automatiquement).
         _ensure_column(conn, "cours", "ia_statut", "TEXT NOT NULL DEFAULT 'absent'")
         _ensure_column(conn, "cours", "ia_resume", "TEXT")
+        _ensure_column(conn, "cours", "ia_resume_detaille", "TEXT")
         _ensure_column(conn, "cours", "ia_flashcards", "TEXT")
         _ensure_column(conn, "cours", "ia_quiz", "TEXT")
         _ensure_column(conn, "cours", "ia_erreur", "TEXT")
+        # Détail des étapes internes d'un traitement (ex. pdftotext puis
+        # bascule OCR page par page) — JSON, voir log_traitement ci-dessous.
+        _ensure_column(conn, "traitements", "etapes", "TEXT")
         conn.commit()
 
 
@@ -99,15 +103,15 @@ def creer_traitement(conn: sqlite3.Connection, *, type: str, cible_type: str, ci
 
 def terminer_traitement(
     conn: sqlite3.Connection, traitement_id: int, *, statut: str, moteur: str | None,
-    resultat: str | None, erreur: str | None, duree_ms: int,
+    resultat: str | None, erreur: str | None, duree_ms: int, etapes: str | None = None,
 ) -> None:
     from datetime import datetime
 
     conn.execute(
         """UPDATE traitements
-           SET statut = ?, moteur = ?, resultat = ?, erreur = ?, duree_ms = ?, finished_at = ?
+           SET statut = ?, moteur = ?, resultat = ?, erreur = ?, duree_ms = ?, etapes = ?, finished_at = ?
            WHERE id = ?""",
-        (statut, moteur, resultat, erreur, duree_ms, datetime.now().isoformat(timespec="seconds"), traitement_id),
+        (statut, moteur, resultat, erreur, duree_ms, etapes, datetime.now().isoformat(timespec="seconds"), traitement_id),
     )
 
 
@@ -116,15 +120,28 @@ def log_traitement(type_: str, cible_type: str, cible_id: int):
     """
     Context manager partagé par tous les producteurs de `traitements`
     (OCR, génération IA, synchro Pronote) : crée une ligne au début du
-    bloc, la complète (succès/échec, durée) à la fin — quoi qu'il arrive.
-    Le code appelant doit renseigner `ctx.moteur` et `ctx.resultat` avant
-    la fin du bloc `with`.
+    bloc, la complète (succès/échec, durée, étapes) à la fin — quoi qu'il
+    arrive. Le code appelant doit renseigner `ctx.moteur` et `ctx.resultat`
+    avant la fin du bloc `with`, et peut journaliser des étapes
+    intermédiaires via `ctx.etape(label, ...)` (ex. "pdftotext" puis
+    "ocr page 1/3") — visibles dans l'écran admin même si le traitement
+    échoue en cours de route, pour comprendre jusqu'où il est allé.
     """
+    import json as _json
     import time
 
     class _Ctx:
-        moteur = None
-        resultat = None
+        def __init__(self):
+            self.moteur = None
+            self.resultat = None
+            self.etapes = []
+
+        def etape(self, label: str, *, statut: str = "succes", detail: str | None = None,
+                   duree_ms: int | None = None, moteur: str | None = None) -> None:
+            self.etapes.append({
+                "label": label, "statut": statut, "detail": detail,
+                "duree_ms": duree_ms, "moteur": moteur,
+            })
 
     ctx = _Ctx()
     with session() as conn:
@@ -138,6 +155,7 @@ def log_traitement(type_: str, cible_type: str, cible_id: int):
             terminer_traitement(
                 conn, traitement_id, statut="echec", moteur=ctx.moteur, resultat=ctx.resultat,
                 erreur=str(e), duree_ms=int((time.monotonic() - debut) * 1000),
+                etapes=_json.dumps(ctx.etapes, ensure_ascii=False) if ctx.etapes else None,
             )
         raise
     else:
@@ -145,6 +163,7 @@ def log_traitement(type_: str, cible_type: str, cible_id: int):
             terminer_traitement(
                 conn, traitement_id, statut="succes", moteur=ctx.moteur, resultat=ctx.resultat,
                 erreur=None, duree_ms=int((time.monotonic() - debut) * 1000),
+                etapes=_json.dumps(ctx.etapes, ensure_ascii=False) if ctx.etapes else None,
             )
 
 
