@@ -55,6 +55,15 @@ AUTHORIZED_EMAILS = {
     e.strip().lower() for e in os.environ.get("AUTHORIZED_EMAILS", "").split(",") if e.strip()
 }
 
+# --- Authentification admin (Cédric) ----------------------------------------
+# Volontairement séparée des comptes élèves (Google) : un élève ne doit
+# jamais pouvoir devenir admin, donc pas de champ "rôle" sur `eleves` — un
+# simple mot de passe partagé, comparé en temps constant (voir
+# `secrets.compare_digest` dans BackEnd/app/main.py), suffit pour un compte
+# admin unique. Vide par défaut : la connexion admin est désactivée tant
+# qu'un mot de passe n'est pas défini dans `.env`.
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
+
 # --- OCR / extraction de texte ----------------------------------------------
 # Utilisé à la fois pour les PDF Pronote scannés (sans couche de texte) et
 # pour les photos de cahier déposées par les élèves.

@@ -25,6 +25,7 @@ import {
   CheckCircle2,
   XCircle,
   Loader2,
+  ShieldCheck,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -218,13 +219,13 @@ function useApi(path, deps = []) {
 /* ------------------------------------------------------------------ */
 
 function useMe() {
-  const [state, setState] = useState({ eleve: null, loading: true });
+  const [state, setState] = useState({ eleve: null, isAdmin: false, loading: true });
 
   const load = useCallback(() => {
     fetch(`${API_BASE}/api/me`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((eleve) => setState({ eleve, loading: false }))
-      .catch(() => setState({ eleve: null, loading: false }));
+      .then((res) => (res.ok ? res.json() : { eleve: null, is_admin: false }))
+      .then((data) => setState({ eleve: data.eleve || null, isAdmin: !!data.is_admin, loading: false }))
+      .catch(() => setState({ eleve: null, isAdmin: false, loading: false }));
   }, []);
 
   useEffect(() => {
@@ -233,10 +234,30 @@ function useMe() {
 
   async function logout() {
     await fetch(`${API_BASE}/auth/logout`, { method: "POST" });
-    setState({ eleve: null, loading: false });
+    setState((s) => ({ ...s, eleve: null }));
   }
 
-  return { ...state, reload: load, logout };
+  // Connexion admin : mot de passe séparé, totalement indépendant des
+  // comptes élèves (Google) — voir Services/config.py::ADMIN_PASSWORD.
+  async function adminLogin(password) {
+    const res = await fetch(`${API_BASE}/auth/admin-login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Erreur ${res.status}`);
+    }
+    setState((s) => ({ ...s, isAdmin: true }));
+  }
+
+  async function adminLogout() {
+    await fetch(`${API_BASE}/auth/admin-logout`, { method: "POST" });
+    setState((s) => ({ ...s, isAdmin: false }));
+  }
+
+  return { ...state, reload: load, logout, adminLogin, adminLogout };
 }
 
 /* ------------------------------------------------------------------ */
@@ -956,6 +977,94 @@ function LoginScreen({ onBack }) {
   );
 }
 
+/* ------------------------------------------------------------------ */
+/* Connexion admin (Cédric) — mot de passe séparé des comptes élèves,   */
+/* un élève ne peut jamais devenir admin par ce biais.                  */
+/* ------------------------------------------------------------------ */
+
+function AdminLoginScreen({ onBack, me }) {
+  const { C } = useTheme();
+  const [password, setPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function submit() {
+    if (!password || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await me.adminLogin(password);
+      onBack();
+    } catch (e) {
+      setError(e.message || "Connexion admin impossible.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div>
+      <ScreenHeader title="Administration" onBack={onBack} />
+      <div style={{ padding: "48px 28px", textAlign: "center" }}>
+        <ShieldCheck size={38} color={C.haunt} strokeWidth={1.4} style={{ marginBottom: 16, ...glowText(C, C.haunt) }} />
+        <h2 style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 20, color: C.ink, margin: "0 0 10px" }}>
+          Accès du Maître Fantôme
+        </h2>
+        <p style={{ fontFamily: uiFont, fontSize: 13.5, color: C.inkSoft, lineHeight: 1.6, margin: "0 0 22px", maxWidth: 320, marginLeft: "auto", marginRight: "auto" }}>
+          Réservé au Maître Fantôme, gardien de Ghost Cards, pour voir et relancer les traitements OCR en arrière-plan.
+        </p>
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+          placeholder="Mot de passe admin"
+          autoFocus
+          style={{ width: "100%", maxWidth: 260, background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "10px 14px", fontFamily: uiFont, fontSize: 14, color: C.ink, outline: "none", textAlign: "center" }}
+        />
+        {error && <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.brick, margin: "10px 0 0" }}>{error}</p>}
+        <div>
+          <button
+            onClick={submit}
+            disabled={submitting || !password}
+            style={{ marginTop: 18, background: C.haunt, color: C.onAccent, border: "none", borderRadius: 10, padding: "11px 24px", fontFamily: uiFont, fontSize: 14, fontWeight: 700, cursor: password ? "pointer" : "default", opacity: submitting ? 0.7 : 1 }}
+          >
+            {submitting ? "Connexion…" : "Se connecter"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AdminControl({ me, onOpenLogin }) {
+  const { C } = useTheme();
+  if (me.loading) return <div style={{ width: 32, height: 32 }} />;
+
+  if (!me.isAdmin) {
+    return (
+      <button
+        onClick={onOpenLogin}
+        title="Administration"
+        aria-label="Connexion administrateur"
+        style={{ border: `1px solid ${C.line}`, background: C.white, borderRadius: 999, width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: C.inkFaint, flexShrink: 0 }}
+      >
+        <ShieldCheck size={15} />
+      </button>
+    );
+  }
+  return (
+    <button
+      onClick={me.adminLogout}
+      title="Déconnexion admin"
+      aria-label="Déconnexion administrateur"
+      style={{ border: `1px solid ${C.line}`, background: C.hauntSoft, borderRadius: 999, width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: C.haunt, flexShrink: 0 }}
+    >
+      <ShieldCheck size={15} />
+    </button>
+  );
+}
+
 function AuthControl({ me, onLogin }) {
   const { C } = useTheme();
   if (me.loading) return <div style={{ width: 32, height: 32 }} />;
@@ -1070,6 +1179,13 @@ export default function App() {
     setStack([]);
     setTab(t);
   }
+
+  // Si l'admin se déconnecte pendant qu'il consulte "Traitements", cet
+  // onglet disparaît de la nav (voir Nav) : retomber sur l'accueil plutôt
+  // que de laisser un onglet actif introuvable et un écran vide.
+  useEffect(() => {
+    if (tab === "traitements" && !me.isAdmin) setTab("home");
+  }, [tab, me.isAdmin]);
   function push(screen, params) {
     setStack((s) => [...s, { screen, params }]);
   }
@@ -1088,8 +1204,11 @@ export default function App() {
   function openTraitement(id) {
     push("traitement", { id });
   }
+  function openAdminLogin() {
+    push("admin-login");
+  }
 
-  const isAdmin = me.eleve?.role === "admin";
+  const isAdmin = me.isAdmin;
   const top = stack[stack.length - 1];
 
   let content;
@@ -1099,6 +1218,8 @@ export default function App() {
     content = <CoursDetail coursId={top.params.id} onBack={pop} me={me} onRequireLogin={requireLogin} />;
   } else if (top?.screen === "login") {
     content = <LoginScreen onBack={pop} />;
+  } else if (top?.screen === "admin-login") {
+    content = <AdminLoginScreen onBack={pop} me={me} />;
   } else if (top?.screen === "traitement") {
     content = <TraitementDetail traitementId={top.params.id} onBack={pop} />;
   } else if (tab === "home") {
@@ -1127,6 +1248,7 @@ export default function App() {
             </div>
             <div className="flex items-center gap-2">
               <AuthControl me={me} onLogin={requireLogin} />
+              <AdminControl me={me} onOpenLogin={openAdminLogin} />
               <button
                 onClick={() => setThemeName((t) => (t === "dark" ? "light" : "dark"))}
                 aria-label={themeName === "dark" ? "Passer en thème clair" : "Passer en thème sombre néon"}

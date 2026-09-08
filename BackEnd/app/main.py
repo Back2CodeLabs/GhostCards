@@ -6,6 +6,7 @@ déclencheur de synchronisation Pronote. Pensée pour tourner en permanence
 sur l'OptiPlex (voir README pour le service systemd).
 """
 import logging
+import secrets
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -37,6 +38,7 @@ from Services.config import (  # noqa: E402
     SESSION_SECRET_KEY,
     GOOGLE_HOSTED_DOMAIN,
     AUTHORIZED_EMAILS,
+    ADMIN_PASSWORD,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -96,17 +98,20 @@ def _current_eleve(request: Request):
         return None
     with db.session() as conn:
         row = conn.execute(
-            "SELECT id, nom, email, avatar_url, role FROM eleves WHERE id = ?", (eleve_id,)
+            "SELECT id, nom, email, avatar_url FROM eleves WHERE id = ?", (eleve_id,)
         ).fetchone()
         return dict(row) if row else None
 
 
-def _require_admin(request: Request) -> dict:
-    """Outil de diagnostic réservé à Cédric (voir HANDOFF.md) — pas une fonctionnalité élève."""
-    eleve = _current_eleve(request)
-    if not eleve or eleve["role"] != "admin":
+def _require_admin(request: Request) -> None:
+    """
+    Outil de diagnostic réservé à Cédric (voir HANDOFF.md) — pas une
+    fonctionnalité élève. Volontairement indépendant des comptes élèves
+    (Google) : un élève ne peut jamais devenir admin, l'accès admin repose
+    sur un mot de passe séparé (voir /auth/admin-login).
+    """
+    if not request.session.get("is_admin"):
         raise HTTPException(403, "Réservé aux administrateurs.")
-    return eleve
 
 
 def _email_autorise(email: str) -> bool:
@@ -155,16 +160,38 @@ async def auth_callback(request: Request):
 
 @app.post("/auth/logout")
 def auth_logout(request: Request):
-    request.session.clear()
+    request.session.pop("eleve_id", None)
+    return {"ok": True}
+
+
+# --- Authentification admin (Cédric) -----------------------------------
+# Totalement indépendante des comptes élèves (Google) : mot de passe
+# unique défini dans .env, jamais lié à un compte Google. Un élève ne peut
+# donc jamais devenir admin, quel que soit son compte Google.
+
+class AdminLogin(BaseModel):
+    password: str
+
+
+@app.post("/auth/admin-login")
+def admin_login(payload: AdminLogin, request: Request):
+    if not ADMIN_PASSWORD:
+        raise HTTPException(500, "ADMIN_PASSWORD n'est pas configuré (voir .env).")
+    if not secrets.compare_digest(payload.password, ADMIN_PASSWORD):
+        raise HTTPException(401, "Mot de passe incorrect.")
+    request.session["is_admin"] = True
+    return {"ok": True}
+
+
+@app.post("/auth/admin-logout")
+def admin_logout(request: Request):
+    request.session.pop("is_admin", None)
     return {"ok": True}
 
 
 @app.get("/api/me")
 def api_me(request: Request):
-    eleve = _current_eleve(request)
-    if not eleve:
-        raise HTTPException(401, "Non connecté")
-    return eleve
+    return {"eleve": _current_eleve(request), "is_admin": bool(request.session.get("is_admin"))}
 
 
 @app.get("/api/matieres")

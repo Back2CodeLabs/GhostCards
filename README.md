@@ -1,6 +1,6 @@
 # Ghost Cards
 
-Plateforme de révision auto-hébergée pour la classe de 3ème B, sur l'OptiPlex
+Plateforme de révision auto-hébergée pour la classe de 2nde F, sur l'OptiPlex
 de Cédric.
 
 ```

@@ -40,7 +40,6 @@ def init_db() -> None:
     with get_connection() as conn:
         conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         _ensure_column(conn, "notes_eleves", "eleve_id", "INTEGER REFERENCES eleves(id)")
-        _ensure_column(conn, "eleves", "role", "TEXT NOT NULL DEFAULT 'eleve'")
         _ensure_column(conn, "notes_eleves", "statut", "TEXT NOT NULL DEFAULT 'pret'")
         _ensure_column(conn, "documents", "texte_extrait", "TEXT")
         conn.commit()

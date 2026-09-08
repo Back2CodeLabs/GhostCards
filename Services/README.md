@@ -93,12 +93,10 @@ déçoit sur de l'écriture manuscrite réelle.
 
 Chaque extraction/OCR est journalisée dans la table `traitements`, visible
 et relançable depuis l'écran "Traitements" du site (nav visible seulement
-pour un compte admin). Pour te passer admin, après ta première connexion
-Google :
-
-```bash
-sqlite3 BackEnd/data/ghostcards.db "UPDATE eleves SET role='admin' WHERE email='ton@email';"
-```
+en étant connecté en admin). L'accès admin est **totalement indépendant**
+des comptes élèves (Google) — un élève ne peut jamais devenir admin :
+définis `ADMIN_PASSWORD` dans `.env`, puis connecte-toi via le petit
+bouton bouclier dans l'en-tête du site.
 
 ## Génération IA (résumés / flashcards / quiz)
 

@@ -110,24 +110,27 @@ jusqu'à **Python 3.13** au moment de l'écriture (confirmé sur PyPI :
 Python 3.13/3.14, mais ça ne sert à rien sans un `paddlepaddle`
 installable dessous.
 
-Recréer le venv en Python 3.13 (Debian/Ubuntu — adapter selon la distro
-réelle de l'OptiPlex) :
+**Seul le venv de `BackEnd/` doit passer en Python 3.13** — pas besoin de
+changer le `python3` par défaut du système : `ghostcards.service` pointe
+sur `.venv/bin/uvicorn`, pas sur `/usr/bin/python3`.
 
-```bash
-# Si python3.13 n'est pas déjà disponible :
-sudo apt update && sudo apt install python3.13 python3.13-venv
-# (à défaut de paquet système, voir deadsnakes PPA ou pyenv)
-
-cd ~/GhostCards/BackEnd
-mv .venv .venv-py314.bak   # garder l'ancien au cas où, à supprimer une fois validé
-python3.13 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt   # inclut désormais paddlepaddle + paddleocr
-```
-
-Puis mettre à jour `WorkingDirectory`/le venv utilisé par
-`ghostcards.service` si le chemin de l'interpréteur y est fixé en dur
-(voir `BackEnd/deploy/ghostcards.service`), et redémarrer le service.
+Procédure complète : voir la réponse détaillée donnée dans la conversation
+du 8 septembre 2026 (déploiement via PuTTY + WinSCP) — récapitulée ici :
+1. Backup + arrêt du service.
+2. Installer `python3.13` (deadsnakes si Ubuntu, sinon pyenv).
+3. Déposer le code (WinSCP, en excluant `.git`, `.venv*`,
+   `__pycache__`, `FrontEnd/node_modules`, `FrontEnd/dist`, et **sans
+   jamais toucher** `BackEnd/.env`, `BackEnd/secrets/`, `BackEnd/data/`
+   côté OptiPlex).
+4. Recréer `BackEnd/.venv` avec `python3.13`, `pip install -r requirements.txt`.
+5. `npm install && npm run build` dans `FrontEnd/`.
+6. Ajouter `ADMIN_PASSWORD=...` dans `.env` (génère-en un avec
+   `python3 -c "import secrets; print(secrets.token_urlsafe(16))"`).
+7. `sudo systemctl daemon-reload && sudo systemctl restart ghostcards`
+   (le fichier `.service` n'a pas besoin de changer : il référence
+   `.venv/bin/...`, qui reste le même chemin).
+8. Se connecter en admin via le petit bouton bouclier dans l'en-tête du
+   site, puis test réel (photo de cahier + écran Traitements admin).
 
 **Premier appel OCR = téléchargement des modèles** : PaddleOCR télécharge
 ses modèles de détection/orientation/reconnaissance au premier usage
@@ -151,9 +154,6 @@ reste à confirmer en conditions réelles.
 - Nouvelle table `traitements` (historique append-only : chaque tentative,
   y compris une relance, crée une nouvelle ligne plutôt que d'écraser la
   précédente).
-- `eleves.role` (`'eleve'` par défaut) — pour passer Cédric en admin :
-  `UPDATE eleves SET role='admin' WHERE email='...'` après sa première
-  connexion Google (pas d'UI de gestion des rôles, ce n'est pas prévu).
 - `notes_eleves.statut` (`'pret'` | `'traitement'` | `'echec'`).
 - `documents.texte_extrait` (cache du texte/OCR pour un document Pronote).
 
@@ -176,24 +176,58 @@ sur l'OCR image si `pdftotext` renvoie un texte trop pauvre (PDF scanné).
 - `GET /api/traitements`, `GET /api/traitements/{id}`, `POST
   /api/traitements/{id}/relancer` — réservés aux admins (`_require_admin`,
   403 sinon).
-- `/api/me` renvoie désormais `role`.
+- `/api/me` renvoie désormais `{"eleve": {...}|null, "is_admin": bool}`
+  (toujours 200, plus jamais 401 — les deux informations sont
+  indépendantes, voir ci-dessous).
 
-**Frontend (`FrontEnd/src/App.jsx`)** : item de nav "Traitements" (si
-`me.eleve?.role === 'admin'`), écran liste + détail (résultat/erreur,
-bouton Relancer). Dans `CoursDetail` : bouton "Photo / PDF" à côté du
+**Authentification admin — révisée le 8 septembre 2026, totalement
+séparée des comptes élèves.** Premier jet : un champ `eleves.role`
+promouvant automatiquement le premier compte Google connecté en admin.
+**Rejeté par Cédric** : il ne veut *aucun* mécanisme par lequel un compte
+élève pourrait devenir admin, même indirectement/accidentellement.
+Remplacé par un compte admin indépendant, à mot de passe, sans lien avec
+Google ni la table `eleves` :
+- `Services/config.py::ADMIN_PASSWORD` (depuis `.env`, vide = connexion
+  admin désactivée).
+- `POST /auth/admin-login` (`{"password": "..."}`, comparaison en temps
+  constant via `secrets.compare_digest`) → `request.session["is_admin"] =
+  True`. `POST /auth/admin-logout` la retire.
+- `_require_admin` vérifie `request.session.get("is_admin")`, plus du
+  tout `eleve.role`.
+- `/auth/logout` (déconnexion élève) ne vide plus que `eleve_id` de la
+  session (`request.session.pop`, pas `.clear()`) pour ne pas
+  déconnecter un admin en même temps, et réciproquement.
+- La colonne `eleves.role` n'est plus créée pour les nouvelles installs
+  (retirée de `init_db`) — elle peut rester présente, inutilisée, sur une
+  base déjà migrée avec l'ancienne version, sans conséquence.
+
+**Frontend (`FrontEnd/src/App.jsx`)** : `useMe` expose `eleve` et
+`isAdmin` séparément (plus plate que la réponse API, mais deux champs
+distincts, jamais couplés) + `adminLogin`/`adminLogout`. Petit bouton
+bouclier dans l'en-tête (`AdminControl`, à côté du bouton de connexion
+Google) ouvrant `AdminLoginScreen` (mot de passe uniquement). Nav
+"Traitements" visible si `me.isAdmin`. Un `useEffect` sur `isAdmin`
+ramène sur l'accueil si l'admin se déconnecte pendant qu'il consulte
+l'onglet Traitements (sinon onglet fantôme, plus dans la nav mais encore
+sélectionné → écran vide ; bug trouvé et corrigé pendant la vérification
+navigateur). Dans `CoursDetail` : bouton "Photo / PDF" à côté du
 formulaire texte ; les notes affichent un badge "Transcription en cours…"
 ou "Échec" selon `statut`, avec poll sur `GET /api/cours/{id}` toutes les
 4s tant qu'une note est `'traitement'`.
 
-**Vérifié dans ce sandbox (pas sur l'OptiPlex)** : migrations (`role`,
-`statut`, `texte_extrait`, table `traitements`), autorisations admin
-(401/403), upload + orchestration OCR (succès et échec, PDF natif vs
-scanné, note en échec), endpoint de relance — via un venv Python 3.13
-jetable et `fastapi.testclient.TestClient`, avec Pronote/Anthropic/OCR
-mockés. Frontend vérifié dans le navigateur (build de prod servi par
-FastAPI, session admin simulée par cookie signé) : nav admin, écran
-Traitements (liste/détail/relance réels), les trois statuts de note
-(prête/en cours/échec) en desktop et mobile, clair et sombre. **Pas encore
+**Vérifié dans ce sandbox (pas sur l'OptiPlex)** : migrations (`statut`,
+`texte_extrait`, table `traitements`), connexion/déconnexion admin par
+mot de passe (bon/mauvais mdp, `ADMIN_PASSWORD` non configuré →  erreur
+claire), indépendance totale eleve/admin (`/api/me` renvoie les deux
+séparément, se (dé)connecter de l'un ne touche pas l'autre), upload +
+orchestration OCR (succès et échec, PDF natif vs scanné, note en échec),
+endpoint de relance — via un venv Python 3.13 jetable et
+`fastapi.testclient.TestClient`, avec Pronote/Anthropic/OCR mockés.
+Frontend vérifié dans un vrai navigateur (build de prod servi par
+FastAPI) : connexion admin par mot de passe réelle (mauvais mdp rejeté,
+bon mdp accepté), nav admin, écran Traitements (liste/détail/relance
+réels), les trois statuts de note (prête/en cours/échec) en desktop et
+mobile, clair et sombre. **Pas encore
 testé sur l'OptiPlex avec un vrai PDF scanné ni une vraie photo de
 cahier** — à faire à la prochaine synchro/dépôt réel, avec une vraie clé
 `ANTHROPIC_API_KEY`.
@@ -218,6 +252,14 @@ cahier** — à faire à la prochaine synchro/dépôt réel, avec une vraie clé
   d'origine, jamais abordé).
 - Espace enseignant (explicitement hors scope v1 dans le cahier des
   charges d'origine).
+- **Durcissement de la connexion admin** (demandé le 8 septembre 2026,
+  pas encore implémenté) : bloquer après 5 tentatives infructueuses
+  (compteur + fenêtre de temps à définir — par IP ? par session ? à
+  trancher), et ajouter un second facteur TOTP (bibliothèque `pyotp`
+  côté serveur, ex. `qrcode` pour l'enrôlement initial via un flux
+  d'appairage — Google Authenticator/Authy compatibles). S'ajoute au
+  mot de passe `ADMIN_PASSWORD` déjà en place (`Services/config.py`,
+  `POST /auth/admin-login`), ne le remplace pas.
 
 ## Bugs déjà rencontrés et corrigés (ne pas réintroduire)
 
@@ -273,8 +315,9 @@ l'OptiPlex**. Avant de l'utiliser en vrai :
    maintenant `python-multipart`, `paddlepaddle`, `paddleocr`).
 4. Redémarrer `ghostcards.service` — `init_db()` applique les migrations
    automatiquement au démarrage.
-5. Passer son propre compte en admin : `UPDATE eleves SET role='admin'
-   WHERE email='...'` dans `data/ghostcards.db`.
+5. Définir `ADMIN_PASSWORD` dans `.env`, puis se connecter en admin via
+   le bouton bouclier dans l'en-tête du site (indépendant des comptes
+   élèves Google — voir section Authentification admin ci-dessus).
 6. Tester avec un vrai PDF Pronote scanné et une vraie photo de cahier,
    en vérifiant l'écran "Traitements" (nav admin) pour voir le résultat
    réel de l'OCR PaddleOCR — pas juste le chemin heureux simulé en
