@@ -232,19 +232,76 @@ testé sur l'OptiPlex avec un vrai PDF scanné ni une vraie photo de
 cahier** — à faire à la prochaine synchro/dépôt réel, avec une vraie clé
 `ANTHROPIC_API_KEY`.
 
+## État — fonctionnel et testé (suite de la session du 8 septembre 2026, deuxième partie)
+
+**Génération IA (résumés/flashcards/quiz)**, implémentée dans
+`Services/ia_generation.py`. Suit le pattern qui fonctionne déjà chez
+Cédric (`Temp/flashcard.sh`, jamais commité — script perso partagé en
+référence pour cette session, contient un token à ne pas réutiliser) :
+`POST {OLLAMA_URL}/api/generate` avec `format: "json"`, `think: false`,
+`stream: false`, prompt = contenu du cours suivi des instructions (dans
+cet ordre, comme chez lui). **Timeout à 1800s** — qwen3:14b en CPU peut
+prendre jusqu'à ~30 min sur un cours complet, observé en pratique par
+Cédric ; un timeout plus court aurait fait échouer des générations
+légitimes.
+- Résultat stocké directement sur la ligne `cours` (colonnes `ia_statut`
+  `'absent'|'en_cours'|'pret'|'echec'`, `ia_resume`, `ia_flashcards` et
+  `ia_quiz` en JSON texte, `ia_erreur`) plutôt que dans une table séparée
+  — une génération remplace la précédente, `GET /api/cours/{id}` les
+  décode et les renvoie sans changement d'API. Migration via
+  `_ensure_column`, comme le reste.
+- `POST /api/cours/{id}/generer` — ouvert à tout le monde (pas de
+  connexion requise, comme le reste de la consultation), no-op si déjà
+  `en_cours`. **Piège trouvé et corrigé pendant la vérification
+  navigateur** : le statut `en_cours` doit être posé de façon
+  **synchrone** dans l'endpoint, avant de planifier la tâche de fond —
+  sinon le premier rechargement du frontend (juste après la réponse HTTP)
+  peut arriver avant que la tâche n'ait eu la main, ne jamais voir passer
+  `en_cours`, et rester bloqué sur l'affichage précédent (le polling
+  frontend ne se déclenche que sur `ia_statut === 'en_cours'`).
+- Journalisé dans `traitements` (type `ia_generation`) comme l'OCR — même
+  écran admin, même relance. `relancer_traitement` (dans `ocr.py`)
+  dispatch maintenant aussi vers `ia_generation.generer_pour_cours` pour
+  `cible_type == 'cours'`, et vers `pronote_sync.sync()` pour
+  `cible_type == 'sync'` (voir point suivant).
+- Frontend (`CoursDetail`) : remplace l'ancien message statique. Bouton
+  "Générer"/"Réessayer"/"Régénérer" selon `ia_statut`, résumé affiché tel
+  quel, flashcards en cartes cliquables (réponse masquée par défaut),
+  quiz à choix multiple avec retour immédiat (bonne réponse en vert,
+  mauvaise en rouge) — pas de score cumulé, gardé simple volontairement.
+  Poll toutes les 6s tant que `ia_statut === 'en_cours'` (même effet que
+  celui déjà utilisé pour l'OCR des notes).
+- Le helper de journalisation (anciennement `ocr._log_traitement`) a été
+  déplacé dans `Services/db.py::log_traitement`, partagé par `ocr.py`,
+  `ia_generation.py` et référencé par `pronote_sync.py`.
+
+**Synchro Pronote visible dans "Traitements"** : `pronote_sync.sync()`
+journalise désormais chaque exécution (manuelle ou programmée toutes les
+2h) dans la table `traitements` (type `pronote_sync`, comme l'OCR/l'IA) —
+aucun changement d'API ni de frontend nécessaire, l'écran admin existant
+les affiche automatiquement (libellé spécial "Synchronisation Pronote"
+plutôt que le nom technique). Relançable depuis le même écran.
+
+**Dédoublonnage des fichiers téléchargés** (`Services/pronote_sync.py::_dedupe_blob`) :
+chaque pièce jointe est maintenant stockée une seule fois, adressée par
+son empreinte sha256, sous `DOCUMENTS_DIR/_blobs/`. Chaque cours/devoir
+garde son propre chemin lisible (`chemin_local` reste unique par ligne
+`documents`, aucune migration de schéma nécessaire) mais ce chemin est un
+**lien physique** (`os.link`) vers le blob partagé plutôt qu'une copie —
+zéro octet dupliqué sur le disque quand Pronote attache le même fichier à
+plusieurs cours. Repli en copie normale si les liens physiques ne sont
+pas disponibles (ex. montage réseau). Vérifié : deux cours partageant le
+même contenu produisent un seul blob et deux `documents` distincts, tous
+deux lisibles avec le bon contenu.
+
+**Liste des élèves en admin** (`GET /api/eleves`, écran "Élèves" dans la
+nav admin) : comptes Google déjà connectés, avec nombre de notes
+déposées et date de dernière connexion. Lecture seule, pas de gestion de
+rôle (l'admin reste un compte séparé, voir plus bas — jamais question
+qu'un élève devienne admin).
+
 ## État — pas commencé
 
-- **Génération IA (résumés/flashcards/quiz)** (`Services/ia_generation.py`
-  n'existe pas encore, seule la config existe : `OLLAMA_URL`,
-  `OLLAMA_MODEL` (`qwen3:14b`), `FLASHCARDS_PAR_COURS`,
-  `QUESTIONS_QUIZ_PAR_COURS`, `IA_TEXTE_MAX_CHARS`). Doit s'appuyer sur
-  Ollama en local (`Services/config.py` explique pourquoi : gros volume,
-  gratuit, privé — contrairement à l'assistant conversationnel qui reste
-  sur l'API Anthropic). Cédric a un script bash qui fait déjà ça
-  manuellement (`flashcard.sh` + un bot Telegram `pdf_drop_bot.py`,
-  partagés en exemple dans la conversation d'origine, PAS repris tels
-  quels mais qui montrent le pattern d'appel Ollama qui fonctionne chez
-  lui : `curl .../api/generate` avec `format: "json"`, `think: false`).
 - **Exposition hors LAN** (nom de domaine + HTTPS + reverse proxy) —
   nécessaire pour que la connexion Google fonctionne pour les élèves
   depuis chez eux. Voir `Services/README.md`.

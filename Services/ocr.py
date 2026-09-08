@@ -2,10 +2,10 @@
 Extraction de texte : PDF Pronote (avec ou sans couche de texte) et photos
 de notes manuscrites déposées par les élèves.
 
-Moteur par défaut : vision Claude (voir OCR_ENGINE dans config.py et
-HANDOFF.md pour les raisons — pas de wheels PaddlePaddle pour Python 3.14,
-et l'écriture manuscrite est le cas le plus dur pour un OCR classique).
-PaddleOCR reste prévu en option interchangeable, en lazy-import.
+Moteur par défaut : PaddleOCR, local et gratuit (voir OCR_ENGINE dans
+config.py et HANDOFF.md pour l'historique de la décision — nécessite un
+venv Python <=3.13). Vision Claude reste disponible en repli
+(OCR_ENGINE=claude) si PaddleOCR déçoit sur de l'écriture manuscrite réelle.
 
 Chaque appel à `transcribe_document`/`transcribe_note` journalise son
 déroulement dans la table `traitements` (durée, succès/échec, résultat) :
@@ -16,8 +16,6 @@ import base64
 import logging
 import subprocess
 import tempfile
-import time
-from contextlib import contextmanager
 from pathlib import Path
 
 from . import db
@@ -27,42 +25,11 @@ log = logging.getLogger("ghostcards.ocr")
 
 _MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
 
+_log_traitement = db.log_traitement  # partagé avec Services/ia_generation.py et pronote_sync.py
+
 
 class OcrError(Exception):
     pass
-
-
-@contextmanager
-def _log_traitement(type_: str, cible_type: str, cible_id: int):
-    """
-    Crée une ligne dans `traitements` au début du bloc, la complète (succès
-    ou échec, durée) à la fin — quoi qu'il arrive. Le code appelant doit
-    renseigner `ctx.moteur` et `ctx.resultat` avant la fin du bloc `with`.
-    """
-    class _Ctx:
-        moteur = None
-        resultat = None
-
-    ctx = _Ctx()
-    with db.session() as conn:
-        traitement_id = db.creer_traitement(conn, type=type_, cible_type=cible_type, cible_id=cible_id)
-
-    debut = time.monotonic()
-    try:
-        yield ctx
-    except Exception as e:  # noqa: BLE001 — on journalise puis on relance pour l'appelant
-        with db.session() as conn:
-            db.terminer_traitement(
-                conn, traitement_id, statut="echec", moteur=ctx.moteur, resultat=ctx.resultat,
-                erreur=str(e), duree_ms=int((time.monotonic() - debut) * 1000),
-            )
-        raise
-    else:
-        with db.session() as conn:
-            db.terminer_traitement(
-                conn, traitement_id, statut="succes", moteur=ctx.moteur, resultat=ctx.resultat,
-                erreur=None, duree_ms=int((time.monotonic() - debut) * 1000),
-            )
 
 
 # --- Extraction PDF (texte natif) -------------------------------------------
@@ -304,3 +271,9 @@ def relancer_traitement(traitement_id: int) -> None:
         transcribe_document(row["cible_id"])
     elif row["cible_type"] == "note":
         transcribe_note(row["cible_id"])
+    elif row["cible_type"] == "sync":
+        from . import pronote_sync  # import tardif : évite toute dépendance circulaire au chargement du module
+        pronote_sync.sync()
+    elif row["cible_type"] == "cours":
+        from . import ia_generation  # idem
+        ia_generation.generer_pour_cours(row["cible_id"])

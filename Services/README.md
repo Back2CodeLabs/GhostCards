@@ -100,9 +100,13 @@ bouton bouclier dans l'en-tête du site.
 
 ## Génération IA (résumés / flashcards / quiz)
 
-À venir — en cours de construction, s'appuiera sur un modèle Ollama local
-plutôt que l'API Anthropic (gros volume de génération, autant que ce soit
-gratuit et privé).
+`Services/ia_generation.py` génère résumé, flashcards et quiz d'un cours
+via un modèle Ollama local (`OLLAMA_URL`, `OLLAMA_MODEL` dans `.env` —
+gros volume de génération potentiel, gratuit et privé, contrairement à
+l'assistant conversationnel qui reste sur l'API Anthropic). Déclenché
+depuis le bouton "Générer" sur la page d'un cours — aucune commande
+manuelle nécessaire. Compter jusqu'à ~30 minutes pour un cours complet
+avec `qwen3:14b` en CPU : normal, pas un bug.
 
 ## Authentification élève (Google)
 

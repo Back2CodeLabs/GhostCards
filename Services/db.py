@@ -42,6 +42,15 @@ def init_db() -> None:
         _ensure_column(conn, "notes_eleves", "eleve_id", "INTEGER REFERENCES eleves(id)")
         _ensure_column(conn, "notes_eleves", "statut", "TEXT NOT NULL DEFAULT 'pret'")
         _ensure_column(conn, "documents", "texte_extrait", "TEXT")
+        # Génération IA (résumé/flashcards/quiz) : stockée directement sur la
+        # ligne `cours` plutôt que dans une table séparée, pour que
+        # GET /api/cours/{id} les renvoie sans changement (dict(cours) les
+        # inclut automatiquement).
+        _ensure_column(conn, "cours", "ia_statut", "TEXT NOT NULL DEFAULT 'absent'")
+        _ensure_column(conn, "cours", "ia_resume", "TEXT")
+        _ensure_column(conn, "cours", "ia_flashcards", "TEXT")
+        _ensure_column(conn, "cours", "ia_quiz", "TEXT")
+        _ensure_column(conn, "cours", "ia_erreur", "TEXT")
         conn.commit()
 
 
@@ -100,6 +109,43 @@ def terminer_traitement(
            WHERE id = ?""",
         (statut, moteur, resultat, erreur, duree_ms, datetime.now().isoformat(timespec="seconds"), traitement_id),
     )
+
+
+@contextmanager
+def log_traitement(type_: str, cible_type: str, cible_id: int):
+    """
+    Context manager partagé par tous les producteurs de `traitements`
+    (OCR, génération IA, synchro Pronote) : crée une ligne au début du
+    bloc, la complète (succès/échec, durée) à la fin — quoi qu'il arrive.
+    Le code appelant doit renseigner `ctx.moteur` et `ctx.resultat` avant
+    la fin du bloc `with`.
+    """
+    import time
+
+    class _Ctx:
+        moteur = None
+        resultat = None
+
+    ctx = _Ctx()
+    with session() as conn:
+        traitement_id = creer_traitement(conn, type=type_, cible_type=cible_type, cible_id=cible_id)
+
+    debut = time.monotonic()
+    try:
+        yield ctx
+    except Exception as e:  # noqa: BLE001 — on journalise puis on relance pour l'appelant
+        with session() as conn:
+            terminer_traitement(
+                conn, traitement_id, statut="echec", moteur=ctx.moteur, resultat=ctx.resultat,
+                erreur=str(e), duree_ms=int((time.monotonic() - debut) * 1000),
+            )
+        raise
+    else:
+        with session() as conn:
+            terminer_traitement(
+                conn, traitement_id, statut="succes", moteur=ctx.moteur, resultat=ctx.resultat,
+                erreur=None, duree_ms=int((time.monotonic() - debut) * 1000),
+            )
 
 
 def upsert_matiere(conn: sqlite3.Connection, nom: str) -> int:

@@ -26,6 +26,7 @@ import {
   XCircle,
   Loader2,
   ShieldCheck,
+  Users,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -90,8 +91,12 @@ const DARK = {
   hauntSoft: "#3A1240",
   spectral: "#2EF2C8",
   spectralSoft: "#0F3B34",
-  brick: "#FF5D5D",
-  brickSoft: "#3D1616",
+  // Corail plutôt que rouge pur : sur un fond violet, un rouge franc
+  // (#FF5D5D) jure et fatigue l'œil (deux teintes qui se disputent
+  // l'attention plutôt que de se compléter). Décalé vers l'orange, il
+  // reste identifiable comme "alerte" sans ce clash.
+  brick: "#FF6B4A",
+  brickSoft: "#3D2016",
   fontHeading: "'Arial Black', 'Helvetica Neue', Arial, sans-serif",
   headingLetterSpacing: "0.3px",
   neonGlow: true,
@@ -488,15 +493,39 @@ function CoursDetail({ coursId, onBack, me, onRequireLogin }) {
   const [uploadError, setUploadError] = useState(null);
   const fileInputRef = useRef(null);
 
+  const [generating, setGenerating] = useState(false);
+  const [generationError, setGenerationError] = useState(null);
+
   // Tant qu'une note déposée en photo/PDF est en cours de transcription
-  // (OCR en arrière-plan, voir Services/ocr.py), on réactualise le cours
-  // pour faire apparaître le résultat sans que l'élève ait à recharger.
+  // (OCR en arrière-plan, voir Services/ocr.py) ou que la génération IA
+  // tourne (voir Services/ia_generation.py — peut prendre plusieurs
+  // minutes, modèle local), on réactualise le cours pour faire apparaître
+  // le résultat sans que l'élève ait à recharger.
   useEffect(() => {
     const enTraitement = cours.data?.notes?.some((n) => n.statut === "traitement");
-    if (!enTraitement) return;
-    const t = setInterval(() => cours.reload(), 4000);
+    const iaEnCours = cours.data?.ia_statut === "en_cours";
+    if (!enTraitement && !iaEnCours) return;
+    const t = setInterval(() => cours.reload(), 6000);
     return () => clearInterval(t);
   }, [cours.data, cours.reload]);
+
+  async function genererIA() {
+    if (generating) return;
+    setGenerating(true);
+    setGenerationError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/cours/${coursId}/generer`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Erreur ${res.status}`);
+      }
+      cours.reload();
+    } catch (e) {
+      setGenerationError(e.message || "Impossible de lancer la génération.");
+    } finally {
+      setGenerating(false);
+    }
+  }
 
   async function submitNote() {
     const contenu = noteText.trim();
@@ -661,12 +690,141 @@ function CoursDetail({ coursId, onBack, me, onRequireLogin }) {
           </button>
         )}
 
-        <div style={{ marginTop: 22, background: C.hauntSoft, borderRadius: 12, padding: 16, display: "flex", gap: 12, alignItems: "flex-start" }}>
-          <Ghost size={20} color={C.haunt} style={{ flexShrink: 0, marginTop: 2 }} />
-          <p style={{ fontFamily: uiFont, fontSize: 13, color: C.ink, lineHeight: 1.5, margin: 0 }}>
-            Résumé, flashcards et quiz pour ce cours arrivent avec le module d'analyse IA — pas encore branché.
-          </p>
-        </div>
+        {c.ia_statut === "pret" ? (
+          <div style={{ marginTop: 22 }}>
+            <p style={{ fontFamily: uiFont, fontSize: 11.5, fontWeight: 700, color: C.inkFaint, letterSpacing: 0.3, margin: "0 0 8px" }}>RÉSUMÉ IA</p>
+            <div style={{ background: C.white, border: `1px solid ${C.line}`, borderRadius: 12, padding: 16 }}>
+              <p style={{ fontFamily: uiFont, fontSize: 14, color: C.ink, lineHeight: 1.55, margin: 0, whiteSpace: "pre-wrap" }}>{c.ia_resume}</p>
+            </div>
+
+            {c.ia_flashcards.length > 0 && (
+              <>
+                <p style={{ fontFamily: uiFont, fontSize: 11.5, fontWeight: 700, color: C.inkFaint, letterSpacing: 0.3, margin: "18px 0 8px" }}>
+                  FLASHCARDS ({c.ia_flashcards.length})
+                </p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {c.ia_flashcards.map((card, i) => (
+                    <Flashcard key={i} card={card} />
+                  ))}
+                </div>
+              </>
+            )}
+
+            {c.ia_quiz.length > 0 && (
+              <>
+                <p style={{ fontFamily: uiFont, fontSize: 11.5, fontWeight: 700, color: C.inkFaint, letterSpacing: 0.3, margin: "18px 0 8px" }}>
+                  QUIZ ({c.ia_quiz.length} questions)
+                </p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {c.ia_quiz.map((q, i) => (
+                    <QuizQuestion key={i} question={q} index={i} />
+                  ))}
+                </div>
+              </>
+            )}
+
+            <button
+              onClick={genererIA}
+              disabled={generating}
+              style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 8, background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "9px 16px", fontFamily: uiFont, fontSize: 12.5, fontWeight: 600, color: C.inkSoft, cursor: generating ? "default" : "pointer" }}
+            >
+              <RefreshCw size={13} style={generating ? { animation: "spin 1s linear infinite" } : {}} /> Régénérer
+            </button>
+            {generationError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "8px 0 0" }}>{generationError}</p>}
+          </div>
+        ) : (
+          <div style={{ marginTop: 22, background: C.hauntSoft, borderRadius: 12, padding: 16, display: "flex", gap: 12, alignItems: "flex-start" }}>
+            <Ghost size={20} color={C.haunt} style={{ flexShrink: 0, marginTop: 2 }} />
+            <div style={{ flex: 1 }}>
+              {c.ia_statut === "en_cours" && (
+                <p style={{ fontFamily: uiFont, fontSize: 13, color: C.ink, lineHeight: 1.5, margin: 0, display: "flex", alignItems: "center", gap: 6 }}>
+                  <Loader2 size={14} style={{ animation: "spin 1s linear infinite", flexShrink: 0 }} />
+                  Génération en cours… ça peut prendre plusieurs minutes (modèle local).
+                </p>
+              )}
+              {c.ia_statut === "echec" && (
+                <>
+                  <p style={{ fontFamily: uiFont, fontSize: 13, color: C.brick, lineHeight: 1.5, margin: "0 0 10px" }}>
+                    Échec de la génération : {c.ia_erreur}
+                  </p>
+                  <button
+                    onClick={genererIA}
+                    disabled={generating}
+                    style={{ background: C.haunt, color: C.onAccent, border: "none", borderRadius: 8, padding: "7px 14px", fontFamily: uiFont, fontSize: 12.5, fontWeight: 700, cursor: generating ? "default" : "pointer" }}
+                  >
+                    {generating ? "Lancement…" : "Réessayer"}
+                  </button>
+                </>
+              )}
+              {(!c.ia_statut || c.ia_statut === "absent") && (
+                <>
+                  <p style={{ fontFamily: uiFont, fontSize: 13, color: C.ink, lineHeight: 1.5, margin: "0 0 10px" }}>
+                    Résumé, flashcards et quiz ne sont pas encore générés pour ce cours.
+                  </p>
+                  <button
+                    onClick={genererIA}
+                    disabled={generating}
+                    style={{ display: "flex", alignItems: "center", gap: 8, background: C.haunt, color: C.onAccent, border: "none", borderRadius: 8, padding: "8px 16px", fontFamily: uiFont, fontSize: 12.5, fontWeight: 700, cursor: generating ? "default" : "pointer", opacity: generating ? 0.7 : 1 }}
+                  >
+                    <Sparkles size={14} /> {generating ? "Lancement…" : "Générer"}
+                  </button>
+                </>
+              )}
+              {generationError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "8px 0 0" }}>{generationError}</p>}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Flashcard({ card }) {
+  const { C } = useTheme();
+  const [revealed, setRevealed] = useState(false);
+  return (
+    <button
+      onClick={() => setRevealed((r) => !r)}
+      style={{ display: "block", width: "100%", textAlign: "left", background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px", cursor: "pointer", fontFamily: uiFont }}
+    >
+      <div style={{ fontSize: 13.5, color: C.ink, fontWeight: 600 }}>{card.question}</div>
+      {revealed ? (
+        <div style={{ fontSize: 13, color: C.spectral, marginTop: 6 }}>{card.reponse}</div>
+      ) : (
+        <div style={{ fontSize: 12, color: C.inkFaint, marginTop: 6 }}>Toucher pour voir la réponse</div>
+      )}
+    </button>
+  );
+}
+
+function QuizQuestion({ question, index }) {
+  const { C } = useTheme();
+  const [choix, setChoix] = useState(null);
+  return (
+    <div style={{ background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px" }}>
+      <div style={{ fontSize: 13.5, color: C.ink, fontWeight: 600, marginBottom: 8 }}>
+        {index + 1}. {question.question}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {question.options.map((opt, i) => {
+          const estChoisie = choix === i;
+          const estCorrecte = i === question.reponse_index;
+          let bg = C.paperDim;
+          let border = C.line;
+          if (choix !== null && estCorrecte) border = C.spectral;
+          else if (estChoisie && !estCorrecte) border = C.brick;
+          if (choix !== null && estCorrecte) bg = C.spectralSoft;
+          else if (estChoisie && !estCorrecte) bg = C.brickSoft;
+          return (
+            <button
+              key={i}
+              onClick={() => choix === null && setChoix(i)}
+              style={{ textAlign: "left", background: bg, border: `1px solid ${border}`, borderRadius: 8, padding: "8px 12px", fontFamily: uiFont, fontSize: 13, color: C.ink, cursor: choix === null ? "pointer" : "default" }}
+            >
+              {opt}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -684,6 +842,11 @@ function traitementStatutInfo(C, statut) {
   return { label: "En cours", color: C.inkFaint, Icon: Loader2 };
 }
 
+function traitementTitre(t) {
+  if (t.type === "pronote_sync") return "Synchronisation Pronote";
+  return `${t.type} · ${t.cible_type} #${t.cible_id}`;
+}
+
 function TraitementsScreen({ onOpenTraitement }) {
   const { C } = useTheme();
   const traitements = useApi("/api/traitements");
@@ -693,7 +856,7 @@ function TraitementsScreen({ onOpenTraitement }) {
       <div style={{ padding: "20px 20px 4px" }}>
         <h1 style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 24, color: C.ink, margin: 0 }}>Traitements</h1>
         <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: "4px 0 0" }}>
-          Extractions de texte et OCR lancés en arrière-plan (documents Pronote, photos de notes).
+          Actions lancées en arrière-plan : synchronisations Pronote, extractions de texte et OCR.
         </p>
       </div>
       <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
@@ -713,7 +876,7 @@ function TraitementsScreen({ onOpenTraitement }) {
               <Icon size={16} color={color} style={t.statut === "en_cours" ? { animation: "spin 1s linear infinite" } : {}} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13.5, color: C.ink, fontWeight: 600 }}>
-                  {t.type} · {t.cible_type} #{t.cible_id}
+                  {traitementTitre(t)}
                 </div>
                 <div style={{ fontSize: 12, color: C.inkSoft, marginTop: 2 }}>
                   {label} {t.moteur ? `· ${t.moteur}` : ""} · {new Date(t.created_at).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
@@ -759,7 +922,7 @@ function TraitementDetail({ traitementId, onBack }) {
 
   return (
     <div style={{ paddingBottom: 28 }}>
-      <ScreenHeader title={`${t.type} · ${t.cible_type} #${t.cible_id}`} onBack={onBack} />
+      <ScreenHeader title={traitementTitre(t)} onBack={onBack} />
       <div style={{ padding: "16px 20px 0" }}>
         <div className="flex items-center gap-2">
           <Icon size={16} color={color} />
@@ -794,6 +957,55 @@ function TraitementDetail({ traitementId, onBack }) {
           <RotateCcw size={15} style={relancing ? { animation: "spin 1s linear infinite" } : {}} /> {relancing ? "Relance…" : "Relancer"}
         </button>
         {relanceMsg && <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkSoft, margin: "10px 0 0" }}>{relanceMsg}</p>}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Élèves — liste admin (comptes Google ayant déjà déposé une note ou    */
+/* consulté le site connectés). Jamais visible des élèves eux-mêmes.     */
+/* ------------------------------------------------------------------ */
+
+function ElevesScreen() {
+  const { C } = useTheme();
+  const eleves = useApi("/api/eleves");
+
+  return (
+    <div>
+      <div style={{ padding: "20px 20px 4px" }}>
+        <h1 style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 24, color: C.ink, margin: 0 }}>Élèves</h1>
+        <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: "4px 0 0" }}>
+          Comptes Google connectés au moins une fois.
+        </p>
+      </div>
+      <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
+        {eleves.loading && <Loading />}
+        {eleves.error && <ApiError message={eleves.error} onRetry={eleves.reload} />}
+        {eleves.data && eleves.data.length === 0 && (
+          <EmptyState text="Aucun élève connecté pour l'instant." icon={Users} />
+        )}
+        {eleves.data?.map((e) => (
+          <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 12, background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px" }}>
+            {e.avatar_url ? (
+              <img src={e.avatar_url} alt="" style={{ width: 32, height: 32, borderRadius: "50%" }} referrerPolicy="no-referrer" />
+            ) : (
+              <span style={{ width: 32, height: 32, borderRadius: "50%", background: C.hauntSoft, color: C.haunt, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, flexShrink: 0 }}>
+                {(e.nom || "?").trim().charAt(0).toUpperCase()}
+              </span>
+            )}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13.5, color: C.ink, fontWeight: 600 }}>{e.nom}</div>
+              <div style={{ fontSize: 12, color: C.inkSoft, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.email}</div>
+            </div>
+            <div style={{ textAlign: "right", flexShrink: 0 }}>
+              <div style={{ fontSize: 12, color: C.inkSoft }}>{e.nb_notes} note{e.nb_notes === 1 ? "" : "s"}</div>
+              <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 1 }}>
+                vu le {new Date(e.derniere_connexion).toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}
+              </div>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -1115,7 +1327,10 @@ function Nav({ tab, setTab, isAdmin }) {
     { id: "search", label: "Recherche", icon: SearchIcon },
     { id: "assistant", label: "Assistant", icon: MessageCircle },
   ];
-  if (isAdmin) items.push({ id: "traitements", label: "Traitements", icon: ListChecks });
+  if (isAdmin) {
+    items.push({ id: "traitements", label: "Traitements", icon: ListChecks });
+    items.push({ id: "eleves", label: "Élèves", icon: Users });
+  }
   return (
     <nav className="gc-nav" style={{ borderTop: `1px solid ${C.line}`, borderRight: `1px solid ${C.line}`, background: C.paper }}>
       {items.map((it) => {
@@ -1180,11 +1395,11 @@ export default function App() {
     setTab(t);
   }
 
-  // Si l'admin se déconnecte pendant qu'il consulte "Traitements", cet
+  // Si l'admin se déconnecte pendant qu'il consulte un onglet admin, cet
   // onglet disparaît de la nav (voir Nav) : retomber sur l'accueil plutôt
   // que de laisser un onglet actif introuvable et un écran vide.
   useEffect(() => {
-    if (tab === "traitements" && !me.isAdmin) setTab("home");
+    if ((tab === "traitements" || tab === "eleves") && !me.isAdmin) setTab("home");
   }, [tab, me.isAdmin]);
   function push(screen, params) {
     setStack((s) => [...s, { screen, params }]);
@@ -1232,6 +1447,8 @@ export default function App() {
     content = <AssistantScreen />;
   } else if (tab === "traitements" && isAdmin) {
     content = <TraitementsScreen onOpenTraitement={openTraitement} />;
+  } else if (tab === "eleves" && isAdmin) {
+    content = <ElevesScreen />;
   }
 
   return (

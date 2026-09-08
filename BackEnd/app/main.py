@@ -5,6 +5,7 @@ Sert les données stockées en SQLite/disque au frontend, et expose un
 déclencheur de synchronisation Pronote. Pensée pour tourner en permanence
 sur l'OptiPlex (voir README pour le service systemd).
 """
+import json
 import logging
 import secrets
 import sys
@@ -29,7 +30,7 @@ _GHOSTCARDS_ROOT = Path(__file__).resolve().parents[2]  # BackEnd/app/main.py ->
 if str(_GHOSTCARDS_ROOT) not in sys.path:
     sys.path.insert(0, str(_GHOSTCARDS_ROOT))
 
-from Services import db, ocr, pronote_sync  # noqa: E402
+from Services import db, ia_generation, ocr, pronote_sync  # noqa: E402
 from Services.auth import oauth  # noqa: E402
 from Services.config import (  # noqa: E402
     DOCUMENTS_DIR,
@@ -246,11 +247,39 @@ def get_cours(cours_id: int):
             "SELECT id, auteur, contenu, type, statut, created_at FROM notes_eleves WHERE cours_id = ? ORDER BY created_at",
             (cours_id,),
         ).fetchall()
+        c = dict(cours)
+        # ia_flashcards/ia_quiz sont stockés en JSON texte (voir Services/ia_generation.py) :
+        # décodés ici pour que le frontend reçoive de vraies structures, pas des chaînes.
+        c["ia_flashcards"] = json.loads(c["ia_flashcards"]) if c.get("ia_flashcards") else []
+        c["ia_quiz"] = json.loads(c["ia_quiz"]) if c.get("ia_quiz") else []
         return {
-            **dict(cours),
+            **c,
             "documents": [dict(d) for d in documents],
             "notes": [dict(n) for n in notes],
         }
+
+
+@app.post("/api/cours/{cours_id}/generer")
+def generer_contenu_ia(cours_id: int, background_tasks: BackgroundTasks):
+    """
+    Déclenche la génération du résumé/flashcards/quiz (Ollama, voir
+    Services/ia_generation.py). Ouvert à tout le monde comme le reste de
+    la consultation du site (pas besoin d'être connecté) ; le statut
+    'en_cours' empêche simplement de relancer une génération déjà en vol.
+    """
+    with db.session() as conn:
+        cours = conn.execute("SELECT ia_statut FROM cours WHERE id = ?", (cours_id,)).fetchone()
+        if cours is None:
+            raise HTTPException(404, "Cours introuvable")
+        if cours["ia_statut"] == "en_cours":
+            return {"status": "deja_en_cours"}
+        # Statut posé de façon synchrone, avant même de planifier la tâche
+        # de fond : sinon le premier rechargement du frontend (juste après
+        # cette réponse) peut arriver avant que la tâche n'ait eu la main,
+        # et rater la transition 'en_cours' dont dépend son polling.
+        conn.execute("UPDATE cours SET ia_statut = 'en_cours' WHERE id = ?", (cours_id,))
+    background_tasks.add_task(ia_generation.generer_pour_cours, cours_id)
+    return {"status": "generation_lancee"}
 
 
 class NoteCreate(BaseModel):
@@ -353,6 +382,20 @@ def relancer_traitement(traitement_id: int, request: Request, background_tasks: 
             raise HTTPException(404, "Traitement introuvable")
     background_tasks.add_task(ocr.relancer_traitement, traitement_id)
     return {"status": "relance_lancee"}
+
+
+@app.get("/api/eleves")
+def list_eleves(request: Request):
+    """Liste des comptes élèves (Google) — outil admin, jamais exposé aux élèves eux-mêmes."""
+    _require_admin(request)
+    with db.session() as conn:
+        rows = conn.execute(
+            """SELECT e.id, e.nom, e.email, e.avatar_url, e.created_at, e.derniere_connexion,
+                      COUNT(n.id) AS nb_notes
+               FROM eleves e LEFT JOIN notes_eleves n ON n.eleve_id = e.id
+               GROUP BY e.id ORDER BY e.derniere_connexion DESC"""
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 @app.get("/api/devoirs")

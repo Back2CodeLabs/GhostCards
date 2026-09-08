@@ -23,8 +23,12 @@ Points d'attention (issus du fonctionnement réel de Pronote / pronotepy) :
 import hashlib
 import json
 import logging
+import os
 import re
+import shutil
+import time
 from datetime import date, timedelta, datetime
+from pathlib import Path
 
 import pronotepy
 
@@ -91,6 +95,23 @@ def get_client() -> pronotepy.Client:
     return client
 
 
+def _dedupe_blob(data: bytes, suffix: str) -> Path:
+    """
+    Stocke un contenu de fichier une seule fois sous DOCUMENTS_DIR/_blobs/,
+    adressé par son empreinte sha256. Pronote attache parfois le même
+    fichier à plusieurs cours/devoirs (photocopie donnée dans deux classes,
+    document réutilisé) : sans ça, chaque référence retéléchargerait et
+    dupliquerait les mêmes octets sur le disque.
+    """
+    digest = hashlib.sha256(data).hexdigest()
+    blob_dir = DOCUMENTS_DIR / "_blobs"
+    blob_dir.mkdir(parents=True, exist_ok=True)
+    blob_path = blob_dir / f"{digest}{suffix}"
+    if not blob_path.exists():
+        blob_path.write_bytes(data)
+    return blob_path
+
+
 def _download_attachment(attachment, dest_dir, base_name: str):
     """
     Télécharge une pièce jointe Pronote sur le disque.
@@ -106,7 +127,17 @@ def _download_attachment(attachment, dest_dir, base_name: str):
     dest_path = dest_dir / filename
 
     if not dest_path.exists():
-        attachment.save(str(dest_path))
+        # Téléchargé dans un fichier temporaire d'abord, pour pouvoir
+        # dédupliquer par contenu (voir _dedupe_blob) avant de l'installer
+        # définitivement sous son nom lisible attendu par le reste du code.
+        tmp_path = dest_dir / f".tmp_{filename}"
+        attachment.save(str(tmp_path))
+        blob_path = _dedupe_blob(tmp_path.read_bytes(), tmp_path.suffix)
+        tmp_path.unlink()
+        try:
+            os.link(blob_path, dest_path)  # lien physique : zéro octet dupliqué
+        except OSError:
+            shutil.copyfile(blob_path, dest_path)  # repli si liens physiques indisponibles
 
     return str(dest_path.relative_to(DOCUMENTS_DIR.parent)), None
 
@@ -124,11 +155,20 @@ def sync(fetch_content: bool = True) -> dict:
     """
     Lance une synchronisation complète. Retourne un résumé (compteurs).
     C'est cette fonction qu'appellent l'API (/api/sync) et la tâche planifiée.
+
+    Journalisée dans `traitements` (type 'pronote_sync') comme les
+    extractions OCR, pour que l'admin voie aussi l'historique des synchros
+    (et puisse la relancer) depuis l'écran "Traitements" — même table,
+    mêmes endpoints, rien de plus à ajouter côté API/frontend.
     """
     db.init_db()
     started_at = _now()
     counters = {"nouveaux_cours": 0, "nouveaux_devoirs": 0, "nouveaux_documents": 0}
     erreur = None
+    debut = time.monotonic()
+
+    with db.session() as conn:
+        traitement_id = db.creer_traitement(conn, type="pronote_sync", cible_type="sync", cible_id=0)
 
     try:
         client = get_client()
@@ -148,6 +188,12 @@ def sync(fetch_content: bool = True) -> dict:
                 """INSERT INTO sync_log (started_at, finished_at, nouveaux_cours, nouveaux_devoirs, nouveaux_documents, erreur)
                    VALUES (?, ?, ?, ?, ?, ?)""",
                 (started_at, _now(), counters["nouveaux_cours"], counters["nouveaux_devoirs"], counters["nouveaux_documents"], erreur),
+            )
+        resultat = f"{counters['nouveaux_cours']} nouveaux cours, {counters['nouveaux_devoirs']} devoirs, {counters['nouveaux_documents']} documents"
+        with db.session() as conn:
+            db.terminer_traitement(
+                conn, traitement_id, statut="echec" if erreur else "succes", moteur="pronotepy",
+                resultat=resultat, erreur=erreur, duree_ms=int((time.monotonic() - debut) * 1000),
             )
 
     if erreur:

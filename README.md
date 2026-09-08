@@ -44,11 +44,11 @@ depuis `BackEnd/` comme avant.
 
 ## À venir
 
-- Génération IA (résumés / flashcards / quiz) via Ollama en local — pas
-  commencé.
 - Exposer le site au-delà du réseau local (nom de domaine + HTTPS), pour que
   la connexion Google fonctionne aussi pour les camarades depuis chez eux —
   voir `Services/README.md`, section Authentification.
+- Durcissement de la connexion admin (verrouillage après échecs répétés,
+  MFA TOTP) — voir `HANDOFF.md`.
 
 ## Fait
 
@@ -63,3 +63,7 @@ depuis `BackEnd/` comme avant.
   extraction et la relancer — voir `Services/README.md`. Implémenté et
   vérifié en sandbox, pas encore testé sur l'OptiPlex : nécessite d'abord
   de repasser le venv en Python ≤3.13 (voir `HANDOFF.md`).
+- Génération IA (résumés / flashcards / quiz) via Ollama en local — voir
+  `HANDOFF.md`. Historique complet des synchros/extractions/générations
+  dans l'écran admin "Traitements" (Pronote, OCR, IA), fichiers Pronote
+  dédupliqués sur le disque, liste des élèves connectés en admin.

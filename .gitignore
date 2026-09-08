@@ -18,3 +18,7 @@ FrontEnd/dist/
 # Éditeurs / OS
 .DS_Store
 Thumbs.db
+
+# Scripts perso de Cédric partagés en référence (secrets réels dedans),
+# jamais versionnés.
+/Temp/
