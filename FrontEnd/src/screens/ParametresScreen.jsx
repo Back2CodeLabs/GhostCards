@@ -34,6 +34,7 @@ export function ParametresScreen() {
   const [ollamaUrl, setOllamaUrl] = useState("");
   const [ollamaModel, setOllamaModel] = useState("");
   const [ollamaChunkSize, setOllamaChunkSize] = useState("");
+  const [ollamaDecoupageActif, setOllamaDecoupageActif] = useState(true);
   const [ollamaModeles, setOllamaModeles] = useState([]);
   const [ollamaModelesLoading, setOllamaModelesLoading] = useState(false);
   const [ollamaModelesError, setOllamaModelesError] = useState(null);
@@ -54,6 +55,7 @@ export function ParametresScreen() {
       setOllamaUrl(parametres.data.ollama_url || "");
       setOllamaModel(parametres.data.ollama_model || "");
       setOllamaChunkSize(String(parametres.data.ollama_chunk_size ?? ""));
+      setOllamaDecoupageActif(parametres.data.ollama_decoupage_actif ?? true);
       setGeminiModel(parametres.data.gemini_model || "");
       setPronoteUrl(parametres.data.pronote_url || "");
       setSyncDaysBack(String(parametres.data.sync_days_back ?? ""));
@@ -93,6 +95,7 @@ export function ParametresScreen() {
         ollama_url: ollamaUrl.trim() || null,
         ollama_model: ollamaModel.trim() || null,
         ollama_chunk_size: ollamaChunkSize.trim() ? parseInt(ollamaChunkSize, 10) : null,
+        ollama_decoupage_actif: ollamaDecoupageActif,
         gemini_model: geminiModel || null,
         pronote_url: pronoteUrl.trim() || null,
         sync_days_back: syncDaysBack.trim() ? parseInt(syncDaysBack, 10) : null,
@@ -284,16 +287,41 @@ export function ParametresScreen() {
                   (<code>ollama pull …</code> sur le serveur pour en ajouter un nouveau).
                 </p>
 
-                <div>
-                  <label style={labelStyle}>TAILLE DE DÉCOUPAGE (CARACTÈRES)</label>
-                  <input type="number" min={1000} step={1000} value={ollamaChunkSize} onChange={(e) => setOllamaChunkSize(e.target.value)} placeholder="12000" style={inputStyle} />
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div style={{ fontFamily: uiFont, fontSize: 12.5, fontWeight: 700, color: C.ink }}>Découpage automatique</div>
+                    <div style={{ fontFamily: uiFont, fontSize: 12, color: C.inkFaint, marginTop: 2, maxWidth: 380 }}>
+                      Ollama tourne en local avec un contexte limité par le matériel : un cours trop long est
+                      découpé en plusieurs parties, chacune résumée séparément, avant la génération finale
+                      (visible étape par étape dans "Traitements").
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setOllamaDecoupageActif((v) => !v)}
+                    title={ollamaDecoupageActif ? "Désactiver le découpage automatique" : "Activer le découpage automatique"}
+                    style={{
+                      flexShrink: 0, display: "flex", alignItems: "center", gap: 5,
+                      background: ollamaDecoupageActif ? C.hauntSoft : C.paperDim,
+                      border: `1px solid ${ollamaDecoupageActif ? C.haunt : C.line}`,
+                      color: ollamaDecoupageActif ? C.haunt : C.inkFaint,
+                      borderRadius: 999, padding: "5px 12px", fontFamily: uiFont, fontSize: 11.5, fontWeight: 700, cursor: "pointer",
+                    }}
+                  >
+                    {ollamaDecoupageActif ? "Activé" : "Désactivé"}
+                  </button>
                 </div>
-                <p style={{ fontFamily: uiFont, fontSize: 12, color: C.inkFaint, margin: 0 }}>
-                  Ollama tourne en local avec un contexte limité par le matériel : un cours dont le texte dépasse
-                  cette taille est découpé en plusieurs parties, chacune résumée séparément, avant la génération
-                  finale (visible étape par étape dans "Traitements"). Sans objet pour Claude/Gemini, qui reçoivent
-                  toujours le cours en entier en un seul appel.
-                </p>
+
+                {ollamaDecoupageActif ? (
+                  <div>
+                    <label style={labelStyle}>TAILLE DE DÉCOUPAGE (CARACTÈRES)</label>
+                    <input type="number" min={1000} step={1000} value={ollamaChunkSize} onChange={(e) => setOllamaChunkSize(e.target.value)} placeholder="12000" style={inputStyle} />
+                  </div>
+                ) : (
+                  <p style={{ fontFamily: uiFont, fontSize: 12, color: C.inkFaint, margin: 0 }}>
+                    Désactivé : le cours entier est envoyé à Ollama en un seul appel, sans troncature ni découpage
+                    — comme pour Claude/Gemini. À réserver à un modèle local à grand contexte.
+                  </p>
+                )}
               </div>
             )}
 

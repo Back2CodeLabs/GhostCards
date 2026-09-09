@@ -55,6 +55,15 @@ log = logging.getLogger("ghostcards.ia_generation")
 # une génération déjà en place (voir completer_pour_cours).
 N_COMPLEMENT = 10
 
+# En dessous de ce seuil, le texte source est presque certainement le
+# signe d'une extraction ratée (PDF scanné mal OCRisé, timeout partiel...)
+# plutôt qu'un cours réellement aussi court : générer quand même produirait
+# un résumé/flashcards hors sujet (le modèle "invente" à partir de presque
+# rien) plutôt que de signaler clairement le problème. Volontairement bas
+# (un cours normal en a facilement 10 à 100 fois plus) pour ne jamais
+# bloquer un cours légitimement bref.
+TEXTE_SOURCE_MIN_CHARS = 200
+
 GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 
@@ -76,6 +85,12 @@ def config_ia(conn) -> dict:
         ollama_chunk_size = int(ollama_chunk_size) if ollama_chunk_size is not None else IA_TEXTE_MAX_CHARS
     except ValueError:
         ollama_chunk_size = IA_TEXTE_MAX_CHARS
+    # Activé par défaut (comportement historique) : un cours trop long pour
+    # tenir dans ollama_chunk_size est découpé en plusieurs parties. Peut être
+    # désactivé depuis l'écran admin "Paramétrage" pour envoyer le texte
+    # entier en un seul appel (ex. modèle local à grand contexte) — voir
+    # `_texte_pour_prompt`.
+    decoupage_actif = db.get_parametre(conn, "ollama_decoupage_actif", "1") == "1"
     return {
         "moteur": moteur,
         "anthropic_api_key": db.get_parametre(conn, "anthropic_api_key", ANTHROPIC_API_KEY),
@@ -89,6 +104,7 @@ def config_ia(conn) -> dict:
         # matériel ; Claude et Gemini acceptent un contexte bien plus grand,
         # donc ce découpage ne s'applique qu'à Ollama (voir `_texte_pour_prompt`).
         "ollama_chunk_size": ollama_chunk_size,
+        "ollama_decoupage_actif": decoupage_actif,
     }
 
 
@@ -433,19 +449,23 @@ def _texte_pour_prompt(ctx, texte: str, cfg: dict) -> str:
     un cours entier : le texte leur est transmis tel quel, sans découpage
     (aucun appel supplémentaire, aucune perte de qualité liée au découpage).
 
-    Pour Ollama, un cours qui tient déjà dans `cfg["ollama_chunk_size"]`
-    part tel quel. Un cours plus long est découpé en parties (voir
-    `_decouper_texte`), chacune résumée séparément ("map"), puis les
-    résumés sont concaténés ("reduce") pour servir de texte source à la
-    génération finale — stratégie "plusieurs passes", réglable depuis le
-    bloc Ollama de l'écran admin "Paramétrage" (sous-menu "Génération IA").
+    Pour Ollama, le découpage peut lui-même être désactivé depuis ce même
+    bloc (bouton "Découpage automatique") — dans ce cas le texte entier est
+    envoyé sans troncature, comme pour Claude/Gemini, sans limite de taille
+    demandée à l'admin. Sinon, un cours qui tient déjà dans
+    `cfg["ollama_chunk_size"]` part tel quel ; un cours plus long est
+    découpé en parties (voir `_decouper_texte`), chacune résumée
+    séparément ("map"), puis les résumés sont concaténés ("reduce") pour
+    servir de texte source à la génération finale — stratégie "plusieurs
+    passes", réglable depuis le bloc Ollama de l'écran admin "Paramétrage"
+    (sous-menu "Génération IA").
 
     Chaque passe est journalisée via `ctx.etape(...)` (voir
     Services/db.py::log_traitement) pour que l'admin voie, dans l'écran
     "Traitements", le détail intermédiaire (chaque résumé de partie) et
     pas seulement le résultat final.
     """
-    if cfg["moteur"] != "ollama":
+    if cfg["moteur"] != "ollama" or not cfg["ollama_decoupage_actif"]:
         return texte
 
     taille_max = cfg["ollama_chunk_size"]
@@ -497,6 +517,19 @@ def generer_pour_cours(cours_id: int) -> None:
             conn.execute(
                 "UPDATE cours SET ia_statut = 'echec', ia_erreur = ? WHERE id = ?",
                 ("Aucun contenu de cours ni document transcrit à partir duquel générer.", cours_id),
+            )
+        return
+
+    if len(texte.strip()) < TEXTE_SOURCE_MIN_CHARS:
+        with db.session() as conn:
+            conn.execute(
+                "UPDATE cours SET ia_statut = 'echec', ia_erreur = ? WHERE id = ?",
+                (
+                    f"Texte source trop court ({len(texte.strip())} caractère(s)) pour générer un résumé "
+                    "fiable — l'extraction du document (pdftotext/OCR) a probablement échoué ou n'a "
+                    "récupéré presque rien. Vérifie le document source plutôt que de relancer tel quel.",
+                    cours_id,
+                ),
             )
         return
 
@@ -588,6 +621,11 @@ def completer_pour_cours(cours_id: int, n: int = N_COMPLEMENT) -> None:
                 # de texte mémorisé, on retombe sur l'ancien comportement.
                 with db.session() as conn:
                     texte_brut = _texte_source(conn, cours)
+                if len(texte_brut.strip()) < TEXTE_SOURCE_MIN_CHARS:
+                    raise GenerationError(
+                        f"Texte source trop court ({len(texte_brut.strip())} caractère(s)) pour compléter "
+                        "de façon fiable — l'extraction du document a probablement échoué."
+                    )
                 ctx.etape(
                     "lecture du contenu source",
                     detail=f"{len(texte_brut)} caractère(s) (description + documents transcrits)",

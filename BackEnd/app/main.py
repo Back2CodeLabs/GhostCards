@@ -480,14 +480,15 @@ def get_parametres(request: Request):
         gemini_model = db.get_parametre(conn, "gemini_model", GEMINI_MODEL)
         gemini_key = db.get_parametre(conn, "gemini_api_key", "")
         anthropic_key = db.get_parametre(conn, "anthropic_api_key", ANTHROPIC_API_KEY)
-        ollama_chunk_size = ia_generation.config_ia(conn)["ollama_chunk_size"]
+        ia_cfg = ia_generation.config_ia(conn)
         pronote_cfg = pronote_sync.config_pronote(conn)
         ocr_cfg = ocr.config_ocr(conn)
     return {
         "ia_moteur": moteur if moteur in ("ollama", "gemini", "claude") else "ollama",
         "ollama_url": ollama_url or OLLAMA_URL,
         "ollama_model": ollama_model or OLLAMA_MODEL,
-        "ollama_chunk_size": ollama_chunk_size,
+        "ollama_chunk_size": ia_cfg["ollama_chunk_size"],
+        "ollama_decoupage_actif": ia_cfg["ollama_decoupage_actif"],
         "gemini_model": gemini_model or GEMINI_MODEL,
         "gemini_api_key_configuree": bool(gemini_key),
         "anthropic_api_key_configuree": bool(anthropic_key),
@@ -522,6 +523,7 @@ class ParametresIA(BaseModel):
     ollama_url: str | None = None
     ollama_model: str | None = None
     ollama_chunk_size: int | None = None
+    ollama_decoupage_actif: bool | None = None
     gemini_model: str | None = None
     gemini_api_key: str | None = None  # None = ne pas changer ; chaîne vide = effacer
     anthropic_api_key: str | None = None  # idem
@@ -552,6 +554,8 @@ def set_parametres(payload: ParametresIA, request: Request):
             db.set_parametre(conn, "ollama_model", payload.ollama_model)
         if payload.ollama_chunk_size is not None:
             db.set_parametre(conn, "ollama_chunk_size", str(payload.ollama_chunk_size))
+        if payload.ollama_decoupage_actif is not None:
+            db.set_parametre(conn, "ollama_decoupage_actif", "1" if payload.ollama_decoupage_actif else "0")
         if payload.gemini_model:
             db.set_parametre(conn, "gemini_model", payload.gemini_model)
         if payload.gemini_api_key is not None:

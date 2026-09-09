@@ -31,6 +31,7 @@ from datetime import date, timedelta, datetime, timezone
 from pathlib import Path
 
 import pronotepy
+import requests
 
 from . import db
 from .config import (
@@ -117,7 +118,18 @@ def get_client(pronote_url: str) -> pronotepy.Client:
         )
 
     creds = json.loads(CREDENTIALS_PATH.read_text(encoding="utf-8"))
-    client = pronotepy.Client.token_login(**creds)
+    try:
+        client = pronotepy.Client.token_login(**creds)
+    except requests.exceptions.RequestException as e:
+        # Message générique volontairement : la cause exacte (DNS, timeout,
+        # proxy, coupure...) importe peu à l'admin, qui ne peut de toute
+        # façon agir que sur "vérifier la connexion internet de l'OptiPlex".
+        # L'exception d'origine reste dans les logs (log.exception plus bas
+        # dans sync()) pour du diagnostic plus poussé si besoin.
+        raise SyncError(
+            "Impossible de joindre le serveur Pronote — vérifie la connexion "
+            "internet de l'OptiPlex, puis réessaie."
+        ) from e
 
     if not client.logged_in:
         raise SyncError("Échec de connexion à Pronote avec le jeton enregistré.")
@@ -183,27 +195,6 @@ def _store_document(conn, *, cours_id=None, devoir_id=None, nom_fichier, chemin_
     )
 
 
-def _resume_resultat(counters: dict) -> str:
-    """
-    Détail lisible (rendu en markdown léger par le frontend, voir
-    FrontEnd/src/components/ResultatFormatte.jsx) plutôt que le seul
-    compte — sinon "3 nouveaux cours" ne dit pas lesquels.
-    """
-    lignes = [
-        f"{counters['nouveaux_cours']} nouveaux cours, {counters['nouveaux_devoirs']} devoirs, "
-        f"{counters['nouveaux_documents']} documents",
-    ]
-    if counters["detail_cours"]:
-        lignes.append("")
-        lignes.append("**Nouveaux cours**")
-        lignes.extend(f"- {ligne}" for ligne in counters["detail_cours"])
-    if counters["detail_devoirs"]:
-        lignes.append("")
-        lignes.append("**Nouveaux devoirs**")
-        lignes.extend(f"- {ligne}" for ligne in counters["detail_devoirs"])
-    return "\n".join(lignes)
-
-
 def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
     """
     Lance une synchronisation complète. Retourne un résumé (compteurs).
@@ -260,7 +251,13 @@ def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
                 _sync_homework(conn, client, date_from, date_to, counters)
             ctx.etape("devoirs", detail=f"{counters['nouveaux_devoirs']} nouveau(x) devoir(s)", duree_ms=int((time.monotonic() - t2) * 1000))
 
-            ctx.resultat = _resume_resultat(counters)
+            # JSON brut plutôt qu'un résumé en phrases — même traitement
+            # que la génération IA (voir Services/ia_generation.py), rendu
+            # en JSON indenté par le frontend (ResultatFormatte.jsx) :
+            # permet de voir d'un coup d'œil si nouveaux_cours/devoirs/
+            # documents sont à 0 parce qu'il n'y a réellement rien de neuf
+            # dans Pronote, ou si la synchro a un problème plus profond.
+            ctx.resultat = json.dumps(counters, ensure_ascii=False)[:4000]
     except Exception as e:  # noqa: BLE001 — déjà journalisé dans `traitements` par db.log_traitement
         log.exception("Échec de la synchronisation Pronote")
         erreur = str(e)
@@ -278,7 +275,10 @@ def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
 
 
 def _sync_lessons(conn, client, date_from, date_to, fetch_content, counters):
-    lessons = client.lessons(date_from, date_to)
+    try:
+        lessons = client.lessons(date_from, date_to)
+    except requests.exceptions.RequestException as e:
+        raise SyncError("Connexion à Pronote perdue pendant la synchronisation — réessaie plus tard.") from e
     log.info("Pronote : %d créneaux reçus entre %s et %s", len(lessons), date_from, date_to)
 
     for lesson in lessons:
@@ -353,7 +353,10 @@ def _fetch_lesson_content(conn, client, lesson, cours_id, subject_name, counters
 
 
 def _sync_homework(conn, client, date_from, date_to, counters):
-    homeworks = client.homework(date_from, date_to)
+    try:
+        homeworks = client.homework(date_from, date_to)
+    except requests.exceptions.RequestException as e:
+        raise SyncError("Connexion à Pronote perdue pendant la synchronisation — réessaie plus tard.") from e
     log.info("Pronote : %d devoirs reçus", len(homeworks))
 
     for hw in homeworks:
