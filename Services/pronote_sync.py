@@ -151,7 +151,7 @@ def _store_document(conn, *, cours_id=None, devoir_id=None, nom_fichier, chemin_
     )
 
 
-def sync(fetch_content: bool = True) -> dict:
+def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
     """
     Lance une synchronisation complète. Retourne un résumé (compteurs).
     C'est cette fonction qu'appellent l'API (/api/sync) et la tâche planifiée.
@@ -163,6 +163,11 @@ def sync(fetch_content: bool = True) -> dict:
     par étape (connexion, cours, devoirs) est journalisé via
     `db.log_traitement`, visible même si la synchro échoue en cours de
     route (utile pour savoir jusqu'où elle est allée).
+
+    `traitement_id` : réutilise une ligne déjà créée (déclenchement manuel
+    depuis l'écran admin, voir POST /api/sync) au lieu d'en créer une
+    nouvelle, pour que l'API puisse renvoyer l'id tout de suite et ouvrir
+    le suivi sans attendre.
     """
     db.init_db()
     started_at = _now()
@@ -170,7 +175,7 @@ def sync(fetch_content: bool = True) -> dict:
     erreur = None
 
     try:
-        with db.log_traitement("pronote_sync", "sync", 0) as ctx:
+        with db.log_traitement("pronote_sync", "sync", 0, traitement_id=traitement_id) as ctx:
             ctx.moteur = "pronotepy"
 
             t0 = time.monotonic()

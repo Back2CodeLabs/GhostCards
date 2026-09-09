@@ -121,7 +121,7 @@ def terminer_traitement(
 
 
 @contextmanager
-def log_traitement(type_: str, cible_type: str, cible_id: int):
+def log_traitement(type_: str, cible_type: str, cible_id: int, *, traitement_id: int | None = None):
     """
     Context manager partagé par tous les producteurs de `traitements`
     (OCR, génération IA, synchro Pronote) : crée une ligne au début du
@@ -131,6 +131,12 @@ def log_traitement(type_: str, cible_type: str, cible_id: int):
     intermédiaires via `ctx.etape(label, ...)` (ex. "pdftotext" puis
     "ocr page 1/3") — visibles dans l'écran admin même si le traitement
     échoue en cours de route, pour comprendre jusqu'où il est allé.
+
+    `traitement_id` : passe une ligne déjà créée (typiquement par l'API,
+    avant de lancer le travail en arrière-plan) plutôt que d'en créer une
+    nouvelle — utilisé par le déclenchement manuel de synchro Pronote pour
+    renvoyer immédiatement l'id au frontend et lui permettre d'ouvrir le
+    suivi sans deviner/rafraîchir la liste.
     """
     import json as _json
     import time
@@ -149,8 +155,9 @@ def log_traitement(type_: str, cible_type: str, cible_id: int):
             })
 
     ctx = _Ctx()
-    with session() as conn:
-        traitement_id = creer_traitement(conn, type=type_, cible_type=cible_type, cible_id=cible_id)
+    if traitement_id is None:
+        with session() as conn:
+            traitement_id = creer_traitement(conn, type=type_, cible_type=cible_type, cible_id=cible_id)
 
     debut = time.monotonic()
     try:

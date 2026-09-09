@@ -644,9 +644,18 @@ def assistant(payload: AssistantRequest, request: Request):
 
 @app.post("/api/sync")
 def trigger_sync(background_tasks: BackgroundTasks):
-    """Déclenche une synchronisation immédiate (ex. bouton 'Actualiser' côté site)."""
-    background_tasks.add_task(pronote_sync.sync)
-    return {"status": "sync_lancee"}
+    """
+    Déclenche une synchronisation immédiate (bouton 'Actualiser' côté
+    site, ou "Lancer une synchronisation" côté admin dans l'écran
+    "Traitements"). La ligne `traitements` est créée ici, avant de
+    lancer le travail en arrière-plan, pour pouvoir renvoyer son id tout
+    de suite : l'écran admin s'en sert pour ouvrir directement le suivi
+    de cette synchro sans attendre ni deviner laquelle vient d'être créée.
+    """
+    with db.session() as conn:
+        traitement_id = db.creer_traitement(conn, type="pronote_sync", cible_type="sync", cible_id=0)
+    background_tasks.add_task(pronote_sync.sync, traitement_id=traitement_id)
+    return {"status": "sync_lancee", "traitement_id": traitement_id}
 
 
 @app.get("/api/sync/last")

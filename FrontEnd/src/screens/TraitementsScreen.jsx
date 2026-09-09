@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { ChevronRight, ListChecks, CheckCircle2, XCircle, Loader2, Sparkles, RotateCcw } from "lucide-react";
+import { ChevronRight, ListChecks, CheckCircle2, XCircle, Loader2, Sparkles, RotateCcw, RefreshCw } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 import { API_BASE, useApi } from "../api";
 import { Loading, ApiError, EmptyState, ScreenHeader } from "../components/Shared";
@@ -55,6 +55,28 @@ function traitementTitre(t) {
 export function TraitementsScreen({ onOpenTraitement }) {
   const { C } = useTheme();
   const traitements = useApi("/api/traitements");
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState(null);
+
+  async function lancerSync() {
+    if (syncing) return;
+    setSyncing(true);
+    setSyncError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/sync`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Erreur ${res.status}`);
+      }
+      const data = await res.json();
+      if (data.traitement_id) onOpenTraitement(data.traitement_id);
+      else traitements.reload();
+    } catch (e) {
+      setSyncError(e.message || "Impossible de lancer la synchronisation.");
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   return (
     <div>
@@ -63,6 +85,17 @@ export function TraitementsScreen({ onOpenTraitement }) {
         <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: "4px 0 0" }}>
           Actions lancées en arrière-plan : synchronisations Pronote, extractions de texte et OCR.
         </p>
+      </div>
+      <div style={{ padding: "16px 20px 0" }}>
+        <button
+          onClick={lancerSync}
+          disabled={syncing}
+          style={{ display: "flex", alignItems: "center", gap: 8, background: C.haunt, color: C.onAccent, border: "none", borderRadius: 10, padding: "9px 16px", fontFamily: uiFont, fontSize: 12.5, fontWeight: 700, cursor: syncing ? "default" : "pointer", opacity: syncing ? 0.7 : 1 }}
+        >
+          <RefreshCw size={13} style={syncing ? { animation: "spin 1s linear infinite" } : {}} />
+          {syncing ? "Lancement…" : "Lancer une synchronisation Pronote"}
+        </button>
+        {syncError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "8px 0 0" }}>{syncError}</p>}
       </div>
       <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
         {traitements.loading && <Loading />}
