@@ -25,6 +25,35 @@ function formatDateHeure(iso) {
   return `${d.toLocaleDateString("fr-FR")} à ${d.toLocaleTimeString("fr-FR")}`;
 }
 
+/* Prompt envoyé à l'IA = contenu du cours (auto, non modifiable) + une
+   CONSIGNE personnalisable ci-dessous + un format JSON de sortie fixe
+   (l'application dépend de ces clés exactes pour lire la réponse). */
+function PromptEditor({ titre, description, consigne, setConsigne, defaut, formatJson, C }) {
+  const zoneStyle = { width: "100%", background: C.paperDim, border: `1px solid ${C.line}`, borderRadius: 8, padding: "8px 10px", fontFamily: "monospace", fontSize: 12, lineHeight: 1.5, color: C.ink, outline: "none", resize: "vertical", boxSizing: "border-box" };
+  const fixeStyle = { width: "100%", background: C.paper, border: `1px dashed ${C.line}`, borderRadius: 8, padding: "8px 10px", fontFamily: "monospace", fontSize: 11, lineHeight: 1.5, color: C.inkFaint, whiteSpace: "pre-wrap", boxSizing: "border-box" };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ fontFamily: uiFont, fontSize: 13, fontWeight: 700, color: C.ink }}>{titre}</div>
+      <p style={{ fontFamily: uiFont, fontSize: 12, color: C.inkFaint, margin: 0 }}>{description}</p>
+
+      <div style={fixeStyle}>« contenu du cours (texte extrait) » — ajouté automatiquement en premier, non modifiable</div>
+
+      <textarea value={consigne} onChange={(e) => setConsigne(e.target.value)} rows={7} placeholder={defaut} style={zoneStyle} />
+      <button
+        onClick={() => setConsigne("")}
+        style={{ alignSelf: "flex-start", background: "transparent", border: "none", color: C.haunt, fontFamily: uiFont, fontSize: 11.5, fontWeight: 700, cursor: "pointer", padding: 0 }}
+      >
+        Réinitialiser au texte par défaut
+      </button>
+
+      <div style={fixeStyle}>{formatJson}</div>
+      <p style={{ fontFamily: uiFont, fontSize: 11, color: C.inkFaint, margin: 0 }}>
+        Ce format JSON reste fixe : l'application dépend de cette structure exacte pour lire la réponse de l'IA.
+      </p>
+    </div>
+  );
+}
+
 export function ParametresScreen() {
   const { C } = useTheme();
   const parametres = useApi("/api/parametres");
@@ -35,6 +64,8 @@ export function ParametresScreen() {
   const [ollamaModel, setOllamaModel] = useState("");
   const [ollamaChunkSize, setOllamaChunkSize] = useState("");
   const [ollamaDecoupageActif, setOllamaDecoupageActif] = useState(true);
+  const [promptGenerationConsigne, setPromptGenerationConsigne] = useState("");
+  const [promptCompletionConsigne, setPromptCompletionConsigne] = useState("");
   const [ollamaModeles, setOllamaModeles] = useState([]);
   const [ollamaModelesLoading, setOllamaModelesLoading] = useState(false);
   const [ollamaModelesError, setOllamaModelesError] = useState(null);
@@ -56,6 +87,8 @@ export function ParametresScreen() {
       setOllamaModel(parametres.data.ollama_model || "");
       setOllamaChunkSize(String(parametres.data.ollama_chunk_size ?? ""));
       setOllamaDecoupageActif(parametres.data.ollama_decoupage_actif ?? true);
+      setPromptGenerationConsigne(parametres.data.ia_prompt_generation_consigne || "");
+      setPromptCompletionConsigne(parametres.data.ia_prompt_completion_consigne || "");
       setGeminiModel(parametres.data.gemini_model || "");
       setPronoteUrl(parametres.data.pronote_url || "");
       setSyncDaysBack(String(parametres.data.sync_days_back ?? ""));
@@ -96,6 +129,8 @@ export function ParametresScreen() {
         ollama_model: ollamaModel.trim() || null,
         ollama_chunk_size: ollamaChunkSize.trim() ? parseInt(ollamaChunkSize, 10) : null,
         ollama_decoupage_actif: ollamaDecoupageActif,
+        ia_prompt_generation_consigne: promptGenerationConsigne,
+        ia_prompt_completion_consigne: promptCompletionConsigne,
         gemini_model: geminiModel || null,
         pronote_url: pronoteUrl.trim() || null,
         sync_days_back: syncDaysBack.trim() ? parseInt(syncDaysBack, 10) : null,
@@ -357,6 +392,35 @@ export function ParametresScreen() {
                 </p>
               </div>
             )}
+
+            <div style={{ height: 1, background: C.line, margin: "16px 0" }} />
+
+            <h3 style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 15, color: C.ink, margin: "0 0 4px" }}>Prompts</h3>
+            <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: "0 0 12px" }}>
+              Modifiable en partie seulement : le contenu du cours est toujours ajouté en premier, et le
+              format JSON attendu en sortie reste fixe (l'application le lit tel quel). Seule la consigne du
+              milieu — ce qu'on demande de produire — peut être personnalisée.
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+              <PromptEditor
+                titre="Génération initiale (résumés + flashcards + quiz)"
+                description="Utilisée quand on clique sur « Générer » pour un cours."
+                consigne={promptGenerationConsigne}
+                setConsigne={setPromptGenerationConsigne}
+                defaut={parametres.data.ia_prompt_generation_consigne_defaut}
+                formatJson={parametres.data.ia_prompt_generation_format_json}
+                C={C}
+              />
+              <PromptEditor
+                titre="Complément (+ 10 flashcards / quiz)"
+                description="Utilisée quand on clique sur « + 10 » pour ajouter du contenu à une génération déjà en place."
+                consigne={promptCompletionConsigne}
+                setConsigne={setPromptCompletionConsigne}
+                defaut={parametres.data.ia_prompt_completion_consigne_defaut}
+                formatJson={parametres.data.ia_prompt_completion_format_json}
+                C={C}
+              />
+            </div>
           </div>
         )}
 

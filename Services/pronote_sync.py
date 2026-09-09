@@ -33,7 +33,7 @@ from pathlib import Path
 import pronotepy
 import requests
 
-from . import db
+from . import db, ocr
 from .config import (
     PRONOTE_URL,
     CREDENTIALS_PATH,
@@ -187,12 +187,37 @@ def _download_attachment(attachment, dest_dir, base_name: str):
 
 
 def _store_document(conn, *, cours_id=None, devoir_id=None, nom_fichier, chemin_local, url_externe, source="pronote"):
-    conn.execute(
+    cur = conn.execute(
         """INSERT OR IGNORE INTO documents
            (cours_id, devoir_id, nom_fichier, chemin_local, url_externe, source, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (cours_id, devoir_id, nom_fichier, chemin_local or f"lien:{url_externe}", url_externe, source, _now()),
     )
+    return cur.lastrowid
+
+
+def _transcrire_document_silencieux(document_id: int | None) -> None:
+    """
+    Extraction de texte lancée juste après le téléchargement d'un document,
+    une fois la transaction de sync commitée (jamais pendant : `transcribe_
+    document` ouvre sa propre connexion en écriture, ce qui se bloquerait
+    sur SQLite si la transaction de sync était encore ouverte).
+
+    Sans ça, le document reste avec `texte_extrait` NULL indéfiniment (rien
+    ne déclenchait jamais sa transcription) et `_texte_source` (voir
+    Services/ia_generation.py) ne trouve que la description Pronote —
+    souvent un simple horaire/titre de chapitre — d'où des générations IA
+    hors sujet malgré un document bien attaché. Une erreur ici (PDF
+    corrompu, OCR indisponible...) ne doit pas interrompre le reste de la
+    synchronisation : elle est déjà journalisée comme traitement en échec
+    par `transcribe_document` lui-même.
+    """
+    if not document_id:
+        return
+    try:
+        ocr.transcribe_document(document_id)
+    except Exception:
+        log.warning("Échec de la transcription automatique du document id=%s", document_id, exc_info=True)
 
 
 def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
@@ -236,10 +261,11 @@ def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
 
             date_from = date.today() - timedelta(days=cfg["sync_days_back"])
             date_to = date.today() + timedelta(days=cfg["sync_days_forward"])
+            documents_a_transcrire = []
 
             t1 = time.monotonic()
             with db.session() as conn:
-                _sync_lessons(conn, client, date_from, date_to, fetch_content, counters)
+                _sync_lessons(conn, client, date_from, date_to, fetch_content, counters, documents_a_transcrire)
             ctx.etape(
                 "cours",
                 detail=f"{counters['nouveaux_cours']} nouveau(x) cours, {counters['nouveaux_documents']} document(s) téléchargé(s)",
@@ -248,8 +274,18 @@ def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
 
             t2 = time.monotonic()
             with db.session() as conn:
-                _sync_homework(conn, client, date_from, date_to, counters)
+                _sync_homework(conn, client, date_from, date_to, counters, documents_a_transcrire)
             ctx.etape("devoirs", detail=f"{counters['nouveaux_devoirs']} nouveau(x) devoir(s)", duree_ms=int((time.monotonic() - t2) * 1000))
+
+            if documents_a_transcrire:
+                t3 = time.monotonic()
+                for document_id in documents_a_transcrire:
+                    _transcrire_document_silencieux(document_id)
+                ctx.etape(
+                    "transcription des documents",
+                    detail=f"{len(documents_a_transcrire)} document(s) transcrit(s) — contenu disponible pour la génération IA",
+                    duree_ms=int((time.monotonic() - t3) * 1000),
+                )
 
             # JSON brut plutôt qu'un résumé en phrases — même traitement
             # que la génération IA (voir Services/ia_generation.py), rendu
@@ -274,7 +310,7 @@ def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
     return counters
 
 
-def _sync_lessons(conn, client, date_from, date_to, fetch_content, counters):
+def _sync_lessons(conn, client, date_from, date_to, fetch_content, counters, documents_a_transcrire):
     try:
         lessons = client.lessons(date_from, date_to)
     except requests.exceptions.RequestException as e:
@@ -322,10 +358,10 @@ def _sync_lessons(conn, client, date_from, date_to, fetch_content, counters):
             already_fetched = bool(row["contenu_recupere"])
 
         if fetch_content and not already_fetched:
-            _fetch_lesson_content(conn, client, lesson, cours_id, subject.name, counters)
+            _fetch_lesson_content(conn, client, lesson, cours_id, subject.name, counters, documents_a_transcrire)
 
 
-def _fetch_lesson_content(conn, client, lesson, cours_id, subject_name, counters):
+def _fetch_lesson_content(conn, client, lesson, cours_id, subject_name, counters, documents_a_transcrire):
     try:
         content = lesson.content  # requête réseau dédiée, coûteuse : une seule fois par cours
     except Exception:
@@ -345,14 +381,15 @@ def _fetch_lesson_content(conn, client, lesson, cours_id, subject_name, counters
     dest_dir = DOCUMENTS_DIR / _slugify(subject_name) / lesson.start.strftime("%Y-%m")
     for f in getattr(content, "files", []):
         chemin_local, url_externe = _download_attachment(f, dest_dir, base_name=f"cours{cours_id}")
-        _store_document(
+        document_id = _store_document(
             conn, cours_id=cours_id, nom_fichier=f.name,
             chemin_local=chemin_local, url_externe=url_externe,
         )
         counters["nouveaux_documents"] += 1
+        documents_a_transcrire.append(document_id)
 
 
-def _sync_homework(conn, client, date_from, date_to, counters):
+def _sync_homework(conn, client, date_from, date_to, counters, documents_a_transcrire):
     try:
         homeworks = client.homework(date_from, date_to)
     except requests.exceptions.RequestException as e:
@@ -387,11 +424,12 @@ def _sync_homework(conn, client, date_from, date_to, counters):
         dest_dir = DOCUMENTS_DIR / _slugify(subject.name) / "devoirs"
         for f in getattr(hw, "files", []):
             chemin_local, url_externe = _download_attachment(f, dest_dir, base_name=f"devoir{devoir_id}")
-            _store_document(
+            document_id = _store_document(
                 conn, devoir_id=devoir_id, nom_fichier=f.name,
                 chemin_local=chemin_local, url_externe=url_externe,
             )
             counters["nouveaux_documents"] += 1
+            documents_a_transcrire.append(document_id)
 
 
 if __name__ == "__main__":

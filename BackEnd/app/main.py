@@ -489,6 +489,16 @@ def get_parametres(request: Request):
         "ollama_model": ollama_model or OLLAMA_MODEL,
         "ollama_chunk_size": ia_cfg["ollama_chunk_size"],
         "ollama_decoupage_actif": ia_cfg["ollama_decoupage_actif"],
+        # Consignes des prompts (voir Services/ia_generation.py) : la partie
+        # "consigne" est personnalisable, le format JSON de sortie non (le
+        # code dépend de ses clés exactes pour lire la réponse de l'IA) —
+        # renvoyé quand même pour que l'écran admin montre le prompt complet.
+        "ia_prompt_generation_consigne": ia_cfg["prompt_generation_consigne"] or ia_generation.PROMPT_GENERATION_CONSIGNE_DEFAUT,
+        "ia_prompt_generation_consigne_defaut": ia_generation.PROMPT_GENERATION_CONSIGNE_DEFAUT,
+        "ia_prompt_generation_format_json": ia_generation.GENERATION_JSON_FORMAT,
+        "ia_prompt_completion_consigne": ia_cfg["prompt_completion_consigne"] or ia_generation.PROMPT_COMPLEMENT_CONSIGNE_DEFAUT,
+        "ia_prompt_completion_consigne_defaut": ia_generation.PROMPT_COMPLEMENT_CONSIGNE_DEFAUT,
+        "ia_prompt_completion_format_json": ia_generation.COMPLEMENT_JSON_FORMAT,
         "gemini_model": gemini_model or GEMINI_MODEL,
         "gemini_api_key_configuree": bool(gemini_key),
         "anthropic_api_key_configuree": bool(anthropic_key),
@@ -524,6 +534,8 @@ class ParametresIA(BaseModel):
     ollama_model: str | None = None
     ollama_chunk_size: int | None = None
     ollama_decoupage_actif: bool | None = None
+    ia_prompt_generation_consigne: str | None = None  # None = ne pas changer ; chaîne vide = réinitialiser au défaut
+    ia_prompt_completion_consigne: str | None = None  # idem
     gemini_model: str | None = None
     gemini_api_key: str | None = None  # None = ne pas changer ; chaîne vide = effacer
     anthropic_api_key: str | None = None  # idem
@@ -556,6 +568,10 @@ def set_parametres(payload: ParametresIA, request: Request):
             db.set_parametre(conn, "ollama_chunk_size", str(payload.ollama_chunk_size))
         if payload.ollama_decoupage_actif is not None:
             db.set_parametre(conn, "ollama_decoupage_actif", "1" if payload.ollama_decoupage_actif else "0")
+        if payload.ia_prompt_generation_consigne is not None:
+            db.set_parametre(conn, "ia_prompt_generation_consigne", payload.ia_prompt_generation_consigne)
+        if payload.ia_prompt_completion_consigne is not None:
+            db.set_parametre(conn, "ia_prompt_completion_consigne", payload.ia_prompt_completion_consigne)
         if payload.gemini_model:
             db.set_parametre(conn, "gemini_model", payload.gemini_model)
         if payload.gemini_api_key is not None:

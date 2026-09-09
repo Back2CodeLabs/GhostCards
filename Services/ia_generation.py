@@ -34,7 +34,7 @@ import time
 import urllib.error
 import urllib.request
 
-from . import db
+from . import db, ocr
 from .config import (
     IA_ENGINE,
     OLLAMA_URL,
@@ -105,6 +105,15 @@ def config_ia(conn) -> dict:
         # donc ce découpage ne s'applique qu'à Ollama (voir `_texte_pour_prompt`).
         "ollama_chunk_size": ollama_chunk_size,
         "ollama_decoupage_actif": decoupage_actif,
+        # Consigne personnalisable des prompts (voir écran admin Paramétrage
+        # → Génération IA → Prompts) : None si l'admin n'a rien personnalisé,
+        # auquel cas `construire_prompt_*` retombe sur le texte par défaut
+        # (PROMPT_*_CONSIGNE_DEFAUT ci-dessous). Le format JSON de sortie,
+        # lui, n'est jamais personnalisable : le code qui lit la réponse de
+        # l'IA dépend de ces clés exactes (voir `resultat.get("flashcards")`
+        # etc. dans generer_pour_cours/completer_pour_cours).
+        "prompt_generation_consigne": db.get_parametre(conn, "ia_prompt_generation_consigne", "") or None,
+        "prompt_completion_consigne": db.get_parametre(conn, "ia_prompt_completion_consigne", "") or None,
     }
 
 
@@ -128,9 +137,17 @@ def lister_modeles_ollama(url: str) -> list[str]:
     return [m["name"] for m in body.get("models", []) if m.get("name")]
 
 
-PROMPT_TEMPLATE = """{texte}
+# Chaque prompt envoyé à l'IA a 3 parties, dans cet ordre : le contenu du
+# cours (jamais personnalisable — c'est la matière première), une CONSIGNE
+# personnalisable depuis l'écran admin Paramétrage → Génération IA →
+# Prompts (ce que ce fichier définit par défaut ci-dessous), et un format
+# JSON de sortie fixe, non personnalisable, car le code qui lit la réponse
+# de l'IA dépend de ces clés exactes (voir plus bas `resultat.get(...)`).
+# `construire_prompt_generation`/`construire_prompt_completion` assemblent
+# les 3 parties ; voir `config_ia` pour la résolution de la consigne
+# effective (personnalisée ou par défaut).
 
-À partir de ce cours, produis :
+PROMPT_GENERATION_CONSIGNE_DEFAUT = """À partir de ce cours, produis :
 1. Un résumé COURT (2 à 4 phrases, l'essentiel seulement).
 2. Un résumé DÉTAILLÉ, dont la longueur doit être proportionnelle à la
    longueur du cours ci-dessus (plus le cours est long/dense, plus ce
@@ -138,28 +155,48 @@ PROMPT_TEMPLATE = """{texte}
    juste pour rester court.
 3. Exactement {nb_flashcards} flashcards de révision (question courte, réponse courte,
    1 phrase maximum).
-4. Exactement {nb_quiz} questions de quiz à choix multiple (4 options, une seule correcte).
+4. Exactement {nb_quiz} questions de quiz à choix multiple (4 options, une seule correcte)."""
 
-Réponds UNIQUEMENT avec un JSON valide, rien d'autre, dans ce format exact, en français,
-sans markdown ni texte avant ou après le JSON :
-{{"resume_court": "...", "resume_detaille": "...", "flashcards": [{{"question": "...", "reponse": "..."}}], "quiz": [{{"question": "...", "options": ["...", "...", "...", "..."], "reponse_index": 0}}]}}
-"""
+GENERATION_JSON_FORMAT = (
+    "Réponds UNIQUEMENT avec un JSON valide, rien d'autre, dans ce format exact, en français,\n"
+    "sans markdown ni texte avant ou après le JSON :\n"
+    '{"resume_court": "...", "resume_detaille": "...", "flashcards": [{"question": "...", "reponse": "..."}], '
+    '"quiz": [{"question": "...", "options": ["...", "...", "...", "..."], "reponse_index": 0}]}'
+)
 
-PROMPT_COMPLEMENT_TEMPLATE = """{texte}
-
-Voici les questions déjà utilisées pour ce cours (à ne pas répéter à l'identique) :
+PROMPT_COMPLEMENT_CONSIGNE_DEFAUT = """Voici les questions déjà utilisées pour ce cours (à ne pas répéter à l'identique) :
 Flashcards existantes : {questions_flashcards}
 Quiz existant : {questions_quiz}
 
 Génère {n} NOUVELLES flashcards de révision (différentes des précédentes,
 question courte / réponse courte, 1 phrase maximum) et {n} NOUVELLES
 questions de quiz à choix multiple (4 options, une seule correcte,
-différentes des précédentes), à partir de ce même cours.
+différentes des précédentes), à partir de ce même cours."""
 
-Réponds UNIQUEMENT avec un JSON valide, rien d'autre, dans ce format exact,
-en français, sans markdown ni texte avant ou après le JSON :
-{{"flashcards": [{{"question": "...", "reponse": "..."}}], "quiz": [{{"question": "...", "options": ["...", "...", "...", "..."], "reponse_index": 0}}]}}
-"""
+COMPLEMENT_JSON_FORMAT = (
+    "Réponds UNIQUEMENT avec un JSON valide, rien d'autre, dans ce format exact,\n"
+    "en français, sans markdown ni texte avant ou après le JSON :\n"
+    '{"flashcards": [{"question": "...", "reponse": "..."}], '
+    '"quiz": [{"question": "...", "options": ["...", "...", "...", "..."], "reponse_index": 0}]}'
+)
+
+
+def construire_prompt_generation(texte: str, nb_flashcards: int, nb_quiz: int, consigne: str | None = None) -> str:
+    consigne = (consigne or PROMPT_GENERATION_CONSIGNE_DEFAUT).replace(
+        "{nb_flashcards}", str(nb_flashcards)).replace("{nb_quiz}", str(nb_quiz))
+    return f"{texte}\n\n{consigne}\n\n{GENERATION_JSON_FORMAT}\n"
+
+
+def construire_prompt_completion(
+    texte: str, n: int, questions_flashcards: str, questions_quiz: str, consigne: str | None = None,
+) -> str:
+    consigne = (
+        (consigne or PROMPT_COMPLEMENT_CONSIGNE_DEFAUT)
+        .replace("{n}", str(n))
+        .replace("{questions_flashcards}", questions_flashcards)
+        .replace("{questions_quiz}", questions_quiz)
+    )
+    return f"{texte}\n\n{consigne}\n\n{COMPLEMENT_JSON_FORMAT}\n"
 
 
 def _appeler_ollama(prompt: str, url: str, model: str) -> dict:
@@ -496,8 +533,34 @@ def _texte_pour_prompt(ctx, texte: str, cfg: dict) -> str:
     return fusion
 
 
+def _transcrire_documents_manquants(cours_id: int) -> None:
+    """
+    Rattrapage avant toute lecture du contenu source : transcrit tout
+    document de ce cours encore jamais passé à l'OCR (texte_extrait NULL).
+
+    En théorie `pronote_sync` déclenche déjà la transcription dès le
+    téléchargement — mais pour un document synchronisé avant l'ajout de ce
+    mécanisme, ou dont la transcription automatique a échoué, `_texte_source`
+    ne renvoyait jusque-là que la description Pronote (souvent un simple
+    horaire/titre de chapitre, ex. "45'. Chapitre 1"), d'où des générations
+    hors sujet malgré un document bien attaché.
+    """
+    with db.session() as conn:
+        ids = [
+            row["id"] for row in conn.execute(
+                "SELECT id FROM documents WHERE cours_id = ? AND texte_extrait IS NULL", (cours_id,)
+            ).fetchall()
+        ]
+    for document_id in ids:
+        try:
+            ocr.transcribe_document(document_id)
+        except Exception:
+            log.warning("Échec de la transcription du document id=%s avant génération IA", document_id, exc_info=True)
+
+
 def generer_pour_cours(cours_id: int) -> None:
     """Génère résumés (court + détaillé)/flashcards/quiz pour un cours et les enregistre sur la ligne `cours`."""
+    _transcrire_documents_manquants(cours_id)
     with db.session() as conn:
         row = conn.execute("SELECT * FROM cours WHERE id = ?", (cours_id,)).fetchone()
         if row is None:
@@ -543,8 +606,8 @@ def generer_pour_cours(cours_id: int) -> None:
             )
 
             texte_pour_prompt = _texte_pour_prompt(ctx, texte, cfg)
-            prompt = PROMPT_TEMPLATE.format(
-                nb_flashcards=FLASHCARDS_PAR_COURS, nb_quiz=QUESTIONS_QUIZ_PAR_COURS, texte=texte_pour_prompt,
+            prompt = construire_prompt_generation(
+                texte_pour_prompt, FLASHCARDS_PAR_COURS, QUESTIONS_QUIZ_PAR_COURS, cfg["prompt_generation_consigne"],
             )
 
             t0 = time.monotonic()
@@ -584,6 +647,7 @@ def completer_pour_cours(cours_id: int, n: int = N_COMPLEMENT) -> None:
     génération déjà en place (bouton "+ 10" côté frontend), sans toucher
     au résumé ni aux flashcards/quiz déjà générés — juste un complément.
     """
+    _transcrire_documents_manquants(cours_id)
     with db.session() as conn:
         row = conn.execute("SELECT * FROM cours WHERE id = ?", (cours_id,)).fetchone()
         if row is None:
@@ -635,10 +699,11 @@ def completer_pour_cours(cours_id: int, n: int = N_COMPLEMENT) -> None:
 
             ctx.etape("lecture de l'existant", detail=f"{len(flashcards_existantes)} flashcard(s), {len(quiz_existant)} question(s) déjà en place")
 
-            prompt = PROMPT_COMPLEMENT_TEMPLATE.format(
-                texte=texte_pour_prompt, n=n,
-                questions_flashcards="; ".join(c["question"] for c in flashcards_existantes) or "(aucune)",
-                questions_quiz="; ".join(q["question"] for q in quiz_existant) or "(aucune)",
+            prompt = construire_prompt_completion(
+                texte_pour_prompt, n,
+                "; ".join(c["question"] for c in flashcards_existantes) or "(aucune)",
+                "; ".join(q["question"] for q in quiz_existant) or "(aucune)",
+                cfg["prompt_completion_consigne"],
             )
 
             t0 = time.monotonic()
