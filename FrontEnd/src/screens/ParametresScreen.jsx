@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { RefreshCw } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 import { API_BASE, useApi } from "../api";
 import { Loading, ApiError } from "../components/Shared";
@@ -9,7 +10,7 @@ import { Loading, ApiError } from "../components/Shared";
 /* ------------------------------------------------------------------ */
 
 const MOTEURS_IA = [
-  { id: "ollama", nom: "Ollama (local, gratuit)", desc: "Tourne sur l'OptiPlex. Aucune donnée envoyée à l'extérieur." },
+  { id: "ollama", nom: "Ollama (local, gratuit)", desc: "URL et modèle configurables ci-dessous. Aucune donnée envoyée à l'extérieur tant que le serveur reste sur ton réseau." },
   { id: "claude", nom: "Claude (Anthropic)", desc: "Nécessite une clé API (console.anthropic.com). Le contenu des cours part chez Anthropic." },
   { id: "gemini", nom: "Gemini (Google)", desc: "Nécessite sa propre clé API (aistudio.google.com). Le contenu des cours part chez Google." },
 ];
@@ -18,6 +19,11 @@ export function ParametresScreen() {
   const { C } = useTheme();
   const parametres = useApi("/api/parametres");
   const [moteur, setMoteur] = useState("ollama");
+  const [ollamaUrl, setOllamaUrl] = useState("");
+  const [ollamaModel, setOllamaModel] = useState("");
+  const [ollamaModeles, setOllamaModeles] = useState([]);
+  const [ollamaModelesLoading, setOllamaModelesLoading] = useState(false);
+  const [ollamaModelesError, setOllamaModelesError] = useState(null);
   const [geminiModel, setGeminiModel] = useState("");
   const [geminiKey, setGeminiKey] = useState("");
   const [anthropicKey, setAnthropicKey] = useState("");
@@ -28,16 +34,44 @@ export function ParametresScreen() {
   useEffect(() => {
     if (parametres.data) {
       setMoteur(parametres.data.ia_moteur);
+      setOllamaUrl(parametres.data.ollama_url || "");
+      setOllamaModel(parametres.data.ollama_model || "");
       setGeminiModel(parametres.data.gemini_model || "");
     }
   }, [parametres.data]);
+
+  async function chargerModelesOllama() {
+    setOllamaModelesLoading(true);
+    setOllamaModelesError(null);
+    try {
+      const qs = ollamaUrl.trim() ? `?url=${encodeURIComponent(ollamaUrl.trim())}` : "";
+      const res = await fetch(`${API_BASE}/api/parametres/ollama-modeles${qs}`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Erreur ${res.status}`);
+      }
+      const data = await res.json();
+      setOllamaModeles(data.modeles || []);
+      if (data.modeles?.length === 0) setOllamaModelesError("Aucun modèle installé sur ce serveur Ollama.");
+    } catch (e) {
+      setOllamaModeles([]);
+      setOllamaModelesError(e.message || "Impossible de récupérer la liste des modèles.");
+    } finally {
+      setOllamaModelesLoading(false);
+    }
+  }
 
   async function enregistrer() {
     setSaving(true);
     setSaveError(null);
     setSaveOk(false);
     try {
-      const body = { ia_moteur: moteur, gemini_model: geminiModel || null };
+      const body = {
+        ia_moteur: moteur,
+        ollama_url: ollamaUrl.trim() || null,
+        ollama_model: ollamaModel.trim() || null,
+        gemini_model: geminiModel || null,
+      };
       if (geminiKey.trim()) body.gemini_api_key = geminiKey.trim();
       if (anthropicKey.trim()) body.anthropic_api_key = anthropicKey.trim();
       const res = await fetch(`${API_BASE}/api/parametres`, {
@@ -67,20 +101,22 @@ export function ParametresScreen() {
     <div>
       <div style={{ padding: "20px 20px 4px" }}>
         <h1 style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 24, color: C.ink, margin: 0 }}>Paramétrage</h1>
-        <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: "4px 0 0" }}>
-          Moteur utilisé pour générer résumés/flashcards/quiz et pour l'assistant conversationnel.
-        </p>
       </div>
       <div style={{ padding: "16px 20px" }}>
         {parametres.loading && <Loading />}
         {parametres.error && <ApiError message={parametres.error} onRetry={parametres.reload} />}
         {parametres.data && (
-          <>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
+          <div style={{ background: C.white, border: `1px solid ${C.line}`, borderRadius: 12, padding: 16 }}>
+            <h2 style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 17, color: C.ink, margin: "0 0 4px" }}>Assistant IA</h2>
+            <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: "0 0 14px" }}>
+              Moteur utilisé pour générer résumés/flashcards/quiz et pour l'assistant conversationnel.
+            </p>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
               {MOTEURS_IA.map((m) => (
                 <label
                   key={m.id}
-                  style={{ display: "flex", gap: 10, alignItems: "flex-start", background: C.white, border: `1px solid ${moteur === m.id ? C.haunt : C.line}`, borderRadius: 10, padding: "12px 14px", cursor: "pointer" }}
+                  style={{ display: "flex", gap: 10, alignItems: "flex-start", background: C.paperDim, border: `1px solid ${moteur === m.id ? C.haunt : C.line}`, borderRadius: 10, padding: "12px 14px", cursor: "pointer" }}
                 >
                   <input type="radio" checked={moteur === m.id} onChange={() => setMoteur(m.id)} style={{ marginTop: 3 }} />
                   <div>
@@ -91,8 +127,55 @@ export function ParametresScreen() {
               ))}
             </div>
 
+            {moteur === "ollama" && (
+              <div style={{ background: C.paperDim, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+                <div>
+                  <label style={labelStyle}>URL DU SERVEUR OLLAMA</label>
+                  <input value={ollamaUrl} onChange={(e) => setOllamaUrl(e.target.value)} placeholder="http://127.0.0.1:11434" style={inputStyle} />
+                </div>
+                <div>
+                  <label style={labelStyle}>MODÈLE</label>
+                  <div className="flex items-center gap-2">
+                    <input value={ollamaModel} onChange={(e) => setOllamaModel(e.target.value)} placeholder="qwen3:14b" style={inputStyle} />
+                    <button
+                      onClick={chargerModelesOllama}
+                      disabled={ollamaModelesLoading}
+                      title="Interroger le serveur Ollama pour lister les modèles installés"
+                      style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 6, background: C.white, border: `1px solid ${C.line}`, borderRadius: 8, padding: "8px 12px", fontFamily: uiFont, fontSize: 12, fontWeight: 600, color: C.inkSoft, cursor: ollamaModelesLoading ? "default" : "pointer" }}
+                    >
+                      <RefreshCw size={13} style={ollamaModelesLoading ? { animation: "spin 1s linear infinite" } : {}} />
+                      {ollamaModelesLoading ? "Recherche…" : "Détecter"}
+                    </button>
+                  </div>
+                  {ollamaModelesError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "6px 0 0" }}>{ollamaModelesError}</p>}
+                  {ollamaModeles.length > 0 && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                      {ollamaModeles.map((nom) => (
+                        <button
+                          key={nom}
+                          onClick={() => setOllamaModel(nom)}
+                          style={{
+                            background: ollamaModel === nom ? C.hauntSoft : C.white,
+                            border: `1px solid ${ollamaModel === nom ? C.haunt : C.line}`,
+                            color: ollamaModel === nom ? C.haunt : C.inkSoft,
+                            borderRadius: 999, padding: "4px 10px", fontFamily: uiFont, fontSize: 11.5, fontWeight: 600, cursor: "pointer",
+                          }}
+                        >
+                          {nom}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <p style={{ fontFamily: uiFont, fontSize: 12, color: C.inkFaint, margin: 0 }}>
+                  "Détecter" interroge {ollamaUrl.trim() || "l'URL ci-dessus"} pour lister les modèles déjà installés
+                  (<code>ollama pull …</code> sur le serveur pour en ajouter un nouveau).
+                </p>
+              </div>
+            )}
+
             {moteur === "claude" && (
-              <div style={{ background: C.white, border: `1px solid ${C.line}`, borderRadius: 12, padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ background: C.paperDim, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
                 <div>
                   <label style={labelStyle}>
                     CLÉ API ANTHROPIC {parametres.data.anthropic_api_key_configuree ? "(déjà configurée — laisser vide pour ne pas la changer)" : "(non configurée)"}
@@ -106,7 +189,7 @@ export function ParametresScreen() {
             )}
 
             {moteur === "gemini" && (
-              <div style={{ background: C.white, border: `1px solid ${C.line}`, borderRadius: 12, padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ background: C.paperDim, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
                 <div>
                   <label style={labelStyle}>MODÈLE GEMINI</label>
                   <input value={geminiModel} onChange={(e) => setGeminiModel(e.target.value)} placeholder="gemini-3.5-flash-lite" style={inputStyle} />
@@ -132,7 +215,7 @@ export function ParametresScreen() {
             </button>
             {saveOk && <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.spectral, margin: "10px 0 0" }}>Paramètres enregistrés.</p>}
             {saveError && <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.brick, margin: "10px 0 0" }}>{saveError}</p>}
-          </>
+          </div>
         )}
       </div>
     </div>

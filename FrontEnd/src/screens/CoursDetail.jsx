@@ -122,6 +122,7 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin }) {
   if (cours.error) return (<div><ScreenHeader title="Cours" onBack={onBack} /><ApiError message={cours.error} onRetry={cours.reload} /></div>);
 
   const c = cours.data;
+  const sansContenu = c.documents.length === 0 && c.notes.length === 0;
 
   return (
     <div style={{ paddingBottom: 28 }}>
@@ -327,7 +328,7 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin }) {
             {generationError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "8px 0 0" }}>{generationError}</p>}
             {completingError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "8px 0 0" }}>{completingError}</p>}
           </div>
-        ) : (
+        ) : sansContenu && (!c.ia_statut || c.ia_statut === "absent") ? null : (
           <div style={{ marginTop: 22, background: C.hauntSoft, borderRadius: 12, padding: 16, display: "flex", gap: 12, alignItems: "flex-start" }}>
             <Ghost size={20} color={C.haunt} style={{ flexShrink: 0, marginTop: 2 }} />
             <div style={{ flex: 1 }}>

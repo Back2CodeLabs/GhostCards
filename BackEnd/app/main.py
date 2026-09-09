@@ -39,6 +39,8 @@ from Services.config import (  # noqa: E402
     AUTHORIZED_EMAILS,
     ADMIN_PASSWORD,
     IA_ENGINE,
+    OLLAMA_URL,
+    OLLAMA_MODEL,
     GEMINI_MODEL,
     ANTHROPIC_API_KEY,
 )
@@ -466,19 +468,43 @@ def get_parametres(request: Request):
     _require_admin(request)
     with db.session() as conn:
         moteur = db.get_parametre(conn, "ia_moteur", IA_ENGINE)
+        ollama_url = db.get_parametre(conn, "ollama_url", OLLAMA_URL)
+        ollama_model = db.get_parametre(conn, "ollama_model", OLLAMA_MODEL)
         gemini_model = db.get_parametre(conn, "gemini_model", GEMINI_MODEL)
         gemini_key = db.get_parametre(conn, "gemini_api_key", "")
         anthropic_key = db.get_parametre(conn, "anthropic_api_key", ANTHROPIC_API_KEY)
     return {
         "ia_moteur": moteur if moteur in ("ollama", "gemini", "claude") else "ollama",
+        "ollama_url": ollama_url or OLLAMA_URL,
+        "ollama_model": ollama_model or OLLAMA_MODEL,
         "gemini_model": gemini_model or GEMINI_MODEL,
         "gemini_api_key_configuree": bool(gemini_key),
         "anthropic_api_key_configuree": bool(anthropic_key),
     }
 
 
+@app.get("/api/parametres/ollama-modeles")
+def get_ollama_modeles(request: Request, url: str | None = None):
+    """
+    Liste les modèles installés sur le serveur Ollama (`GET {url}/api/tags`)
+    pour l'écran Paramétrage — évite de taper le nom du modèle à la main et
+    vérifie au passage que l'adresse saisie est joignable. `url` en query
+    string permet de tester une adresse pas encore enregistrée.
+    """
+    _require_admin(request)
+    with db.session() as conn:
+        base_url = url or db.get_parametre(conn, "ollama_url", OLLAMA_URL) or OLLAMA_URL
+    try:
+        modeles = ia_generation.lister_modeles_ollama(base_url)
+    except ia_generation.GenerationError as e:
+        raise HTTPException(502, str(e))
+    return {"modeles": modeles}
+
+
 class ParametresIA(BaseModel):
     ia_moteur: str
+    ollama_url: str | None = None
+    ollama_model: str | None = None
     gemini_model: str | None = None
     gemini_api_key: str | None = None  # None = ne pas changer ; chaîne vide = effacer
     anthropic_api_key: str | None = None  # idem
@@ -491,6 +517,10 @@ def set_parametres(payload: ParametresIA, request: Request):
         raise HTTPException(400, "Moteur invalide (attendu 'ollama', 'gemini' ou 'claude').")
     with db.session() as conn:
         db.set_parametre(conn, "ia_moteur", payload.ia_moteur)
+        if payload.ollama_url:
+            db.set_parametre(conn, "ollama_url", payload.ollama_url)
+        if payload.ollama_model:
+            db.set_parametre(conn, "ollama_model", payload.ollama_model)
         if payload.gemini_model:
             db.set_parametre(conn, "gemini_model", payload.gemini_model)
         if payload.gemini_api_key is not None:

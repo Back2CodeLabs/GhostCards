@@ -103,12 +103,16 @@ bouton bouclier dans l'en-tête du site.
 `Services/ia_generation.py` génère résumé, flashcards et quiz d'un cours,
 et fait aussi tourner l'assistant conversationnel — **les deux passent
 par le même moteur**. Trois moteurs possibles : Ollama local (par
-défaut, gratuit — `OLLAMA_URL`/`OLLAMA_MODEL` dans `.env`), Claude
-(Anthropic) ou Gemini (Google). Le choix et les clés se changent **à
-chaud depuis l'écran admin "Paramétrage"**, sans redémarrer le service —
-`.env` (`IA_ENGINE`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`) ne sert que
-de valeur de départ. Chaque moteur cloud (Claude, Gemini) a sa propre
-clé, jamais réutilisée automatiquement pour l'autre.
+défaut, gratuit), Claude (Anthropic) ou Gemini (Google). Le choix, l'URL
+et le modèle Ollama, les modèles Claude/Gemini et leurs clés se
+changent **à chaud depuis l'écran admin "Paramétrage"** (un seul bloc
+"Assistant IA" qui regroupe les trois), sans redémarrer le service —
+`.env` (`IA_ENGINE`, `OLLAMA_URL`, `OLLAMA_MODEL`, `ANTHROPIC_API_KEY`,
+`GEMINI_API_KEY`) ne sert que de valeur de départ. Un bouton "Détecter"
+interroge `{url}/api/tags` sur le serveur Ollama choisi pour proposer la
+liste des modèles réellement installés plutôt que de taper le nom à la
+main. Chaque moteur cloud (Claude, Gemini) a sa propre clé, jamais
+réutilisée automatiquement pour l'autre.
 
 Pourquoi pas la connexion Google des élèves pour utiliser leur propre
 Gemini ? Vérifié : "Sign in with Google" ne donne aucun accès à l'API

@@ -76,7 +76,29 @@ def config_ia(conn) -> dict:
         "anthropic_api_key": db.get_parametre(conn, "anthropic_api_key", ANTHROPIC_API_KEY),
         "gemini_api_key": db.get_parametre(conn, "gemini_api_key", GEMINI_API_KEY),
         "gemini_model": db.get_parametre(conn, "gemini_model", GEMINI_MODEL) or GEMINI_MODEL,
+        "ollama_url": db.get_parametre(conn, "ollama_url", OLLAMA_URL) or OLLAMA_URL,
+        "ollama_model": db.get_parametre(conn, "ollama_model", OLLAMA_MODEL) or OLLAMA_MODEL,
     }
+
+
+def lister_modeles_ollama(url: str) -> list[str]:
+    """
+    Interroge `{url}/api/tags` pour lister les modèles installés sur ce
+    serveur Ollama — utilisé par l'écran admin "Paramétrage" pour proposer
+    un choix plutôt que de laisser taper le nom du modèle à la main (et
+    vérifier au passage que l'URL saisie est bien joignable).
+    """
+    req = urllib.request.Request(f"{url.rstrip('/')}/api/tags")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.URLError as e:
+        raise GenerationError(f"Ollama injoignable sur {url} : {e}") from e
+    except TimeoutError as e:
+        raise GenerationError(f"Ollama n'a pas répondu à temps ({url})") from e
+    except json.JSONDecodeError as e:
+        raise GenerationError(f"Réponse Ollama inexploitable : {e}") from e
+    return [m["name"] for m in body.get("models", []) if m.get("name")]
 
 
 PROMPT_TEMPLATE = """{texte}
@@ -113,16 +135,16 @@ en français, sans markdown ni texte avant ou après le JSON :
 """
 
 
-def _appeler_ollama(prompt: str) -> dict:
+def _appeler_ollama(prompt: str, url: str, model: str) -> dict:
     payload = json.dumps({
-        "model": OLLAMA_MODEL,
+        "model": model,
         "prompt": prompt,
         "format": "json",
         "think": False,
         "stream": False,
     }).encode("utf-8")
     req = urllib.request.Request(
-        f"{OLLAMA_URL}/api/generate", data=payload,
+        f"{url}/api/generate", data=payload,
         headers={"Content-Type": "application/json"}, method="POST",
     )
     try:
@@ -131,9 +153,9 @@ def _appeler_ollama(prompt: str) -> dict:
         with urllib.request.urlopen(req, timeout=1800) as resp:
             body = json.loads(resp.read().decode("utf-8"))
     except urllib.error.URLError as e:
-        raise GenerationError(f"Ollama injoignable sur {OLLAMA_URL} : {e}") from e
+        raise GenerationError(f"Ollama injoignable sur {url} : {e}") from e
     except TimeoutError as e:
-        raise GenerationError(f"Ollama n'a pas répondu à temps ({OLLAMA_URL})") from e
+        raise GenerationError(f"Ollama n'a pas répondu à temps ({url})") from e
 
     try:
         return json.loads(body["response"])
@@ -227,7 +249,7 @@ def _appeler_ia(prompt: str, cfg: dict) -> dict:
         return _appeler_gemini(prompt, cfg["gemini_api_key"], cfg["gemini_model"])
     if cfg["moteur"] == "claude":
         return _appeler_claude(prompt, cfg["anthropic_api_key"])
-    return _appeler_ollama(prompt)
+    return _appeler_ollama(prompt, cfg["ollama_url"], cfg["ollama_model"])
 
 
 def _nom_moteur(cfg: dict) -> str:
@@ -235,23 +257,23 @@ def _nom_moteur(cfg: dict) -> str:
         return cfg["gemini_model"]
     if cfg["moteur"] == "claude":
         return CLAUDE_MODEL
-    return OLLAMA_MODEL
+    return cfg["ollama_model"]
 
 
 # --- Assistant conversationnel : même moteur configuré, réponse texte -----
 # (pas de JSON forcé ici, contrairement à la génération — juste une
 # réponse en français comme dans une conversation normale).
 
-def _chat_ollama(messages: list[dict], system_prompt: str) -> str:
+def _chat_ollama(messages: list[dict], system_prompt: str, url: str, model: str) -> str:
     payload = json.dumps({
-        "model": OLLAMA_MODEL,
+        "model": model,
         "messages": [{"role": "system", "content": system_prompt}]
         + [{"role": m["role"], "content": m["text"]} for m in messages],
         "stream": False,
         "think": False,
     }).encode("utf-8")
     req = urllib.request.Request(
-        f"{OLLAMA_URL}/api/chat", data=payload,
+        f"{url}/api/chat", data=payload,
         headers={"Content-Type": "application/json"}, method="POST",
     )
     try:
@@ -260,9 +282,9 @@ def _chat_ollama(messages: list[dict], system_prompt: str) -> str:
         with urllib.request.urlopen(req, timeout=120) as resp:
             body = json.loads(resp.read().decode("utf-8"))
     except urllib.error.URLError as e:
-        raise GenerationError(f"Ollama injoignable sur {OLLAMA_URL} : {e}") from e
+        raise GenerationError(f"Ollama injoignable sur {url} : {e}") from e
     except TimeoutError as e:
-        raise GenerationError(f"Ollama n'a pas répondu à temps ({OLLAMA_URL})") from e
+        raise GenerationError(f"Ollama n'a pas répondu à temps ({url})") from e
 
     try:
         return body["message"]["content"]
@@ -327,7 +349,7 @@ def repondre_conversation(messages: list[dict], system_prompt: str, cfg: dict) -
         return _chat_gemini(messages, system_prompt, cfg["gemini_api_key"], cfg["gemini_model"])
     if cfg["moteur"] == "claude":
         return _chat_claude(messages, system_prompt, cfg["anthropic_api_key"])
-    return _chat_ollama(messages, system_prompt)
+    return _chat_ollama(messages, system_prompt, cfg["ollama_url"], cfg["ollama_model"])
 
 
 def _texte_source(conn, cours: dict) -> str:
