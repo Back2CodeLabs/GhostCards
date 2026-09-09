@@ -7,12 +7,27 @@ base de données séparé à installer, sauvegarder et surveiller. Le mode WAL
 permet de lire pendant qu'une synchronisation écrit, sans verrouillage.
 """
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from contextlib import contextmanager
 
 from .config import DB_PATH
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
+
+
+def now_iso() -> str:
+    """
+    Horodatage courant en UTC, avec le décalage explicite dans la chaîne
+    ISO (ex. "2026-09-09T01:04:28+00:00"). Le frontend (`new Date(iso)`)
+    convertit alors correctement vers le fuseau du navigateur qui affiche
+    la page — indispensable puisque l'OptiPlex tourne en UTC alors que
+    Cédric et ses élèves sont en Europe/Paris (décalage de 1h ou 2h selon
+    l'heure d'été) : un `datetime.now()` naïf aurait donné une heure sans
+    fuseau, que le navigateur aurait alors interprétée à tort comme étant
+    déjà dans SON fuseau local, décalant l'affichage de 1h ou 2h.
+    """
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def get_connection() -> sqlite3.Connection:
@@ -64,9 +79,7 @@ def init_db() -> None:
 
 
 def upsert_eleve(conn: sqlite3.Connection, *, google_sub: str, email: str, nom: str, avatar_url: str | None) -> int:
-    from datetime import datetime
-
-    now = datetime.now().isoformat(timespec="seconds")
+    now = now_iso()
     row = conn.execute("SELECT id FROM eleves WHERE google_sub = ?", (google_sub,)).fetchone()
     if row:
         conn.execute(
@@ -96,12 +109,10 @@ def session():
 
 
 def creer_traitement(conn: sqlite3.Connection, *, type: str, cible_type: str, cible_id: int) -> int:
-    from datetime import datetime
-
     cur = conn.execute(
         """INSERT INTO traitements (type, cible_type, cible_id, statut, created_at)
            VALUES (?, ?, ?, 'en_cours', ?)""",
-        (type, cible_type, cible_id, datetime.now().isoformat(timespec="seconds")),
+        (type, cible_type, cible_id, now_iso()),
     )
     return cur.lastrowid
 
@@ -110,13 +121,11 @@ def terminer_traitement(
     conn: sqlite3.Connection, traitement_id: int, *, statut: str, moteur: str | None,
     resultat: str | None, erreur: str | None, duree_ms: int, etapes: str | None = None,
 ) -> None:
-    from datetime import datetime
-
     conn.execute(
         """UPDATE traitements
            SET statut = ?, moteur = ?, resultat = ?, erreur = ?, duree_ms = ?, etapes = ?, finished_at = ?
            WHERE id = ?""",
-        (statut, moteur, resultat, erreur, duree_ms, etapes, datetime.now().isoformat(timespec="seconds"), traitement_id),
+        (statut, moteur, resultat, erreur, duree_ms, etapes, now_iso(), traitement_id),
     )
 
 

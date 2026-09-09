@@ -1,12 +1,13 @@
 import { useState, useEffect } from "react";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, CheckCircle2, XCircle } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 import { API_BASE, useApi } from "../api";
 import { Loading, ApiError } from "../components/Shared";
 
 /* ------------------------------------------------------------------ */
-/* Paramétrage — choix du moteur IA (génération + assistant), admin      */
-/* uniquement. Modifiable à chaud, pas besoin de redémarrer le service.  */
+/* Paramétrage — choix du moteur IA (génération + assistant) et config   */
+/* Pronote, admin uniquement. Modifiable à chaud, pas besoin de          */
+/* redémarrer le service.                                                */
 /* ------------------------------------------------------------------ */
 
 const MOTEURS_IA = [
@@ -15,9 +16,15 @@ const MOTEURS_IA = [
   { id: "gemini", nom: "Gemini (Google)", desc: "Nécessite sa propre clé API (aistudio.google.com). Le contenu des cours part chez Google." },
 ];
 
+function formatDateHeure(iso) {
+  const d = new Date(iso);
+  return `${d.toLocaleDateString("fr-FR")} à ${d.toLocaleTimeString("fr-FR")}`;
+}
+
 export function ParametresScreen() {
   const { C } = useTheme();
   const parametres = useApi("/api/parametres");
+  const derniereSync = useApi("/api/sync/last");
   const [moteur, setMoteur] = useState("ollama");
   const [ollamaUrl, setOllamaUrl] = useState("");
   const [ollamaModel, setOllamaModel] = useState("");
@@ -27,6 +34,9 @@ export function ParametresScreen() {
   const [geminiModel, setGeminiModel] = useState("");
   const [geminiKey, setGeminiKey] = useState("");
   const [anthropicKey, setAnthropicKey] = useState("");
+  const [pronoteUrl, setPronoteUrl] = useState("");
+  const [syncDaysBack, setSyncDaysBack] = useState("");
+  const [syncDaysForward, setSyncDaysForward] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const [saveOk, setSaveOk] = useState(false);
@@ -37,6 +47,9 @@ export function ParametresScreen() {
       setOllamaUrl(parametres.data.ollama_url || "");
       setOllamaModel(parametres.data.ollama_model || "");
       setGeminiModel(parametres.data.gemini_model || "");
+      setPronoteUrl(parametres.data.pronote_url || "");
+      setSyncDaysBack(String(parametres.data.sync_days_back ?? ""));
+      setSyncDaysForward(String(parametres.data.sync_days_forward ?? ""));
     }
   }, [parametres.data]);
 
@@ -71,6 +84,9 @@ export function ParametresScreen() {
         ollama_url: ollamaUrl.trim() || null,
         ollama_model: ollamaModel.trim() || null,
         gemini_model: geminiModel || null,
+        pronote_url: pronoteUrl.trim() || null,
+        sync_days_back: syncDaysBack.trim() ? parseInt(syncDaysBack, 10) : null,
+        sync_days_forward: syncDaysForward.trim() ? parseInt(syncDaysForward, 10) : null,
       };
       if (geminiKey.trim()) body.gemini_api_key = geminiKey.trim();
       if (anthropicKey.trim()) body.anthropic_api_key = anthropicKey.trim();
@@ -102,7 +118,7 @@ export function ParametresScreen() {
       <div style={{ padding: "20px 20px 4px" }}>
         <h1 style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 24, color: C.ink, margin: 0 }}>Paramétrage</h1>
       </div>
-      <div style={{ padding: "16px 20px" }}>
+      <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 16 }}>
         {parametres.loading && <Loading />}
         {parametres.error && <ApiError message={parametres.error} onRetry={parametres.reload} />}
         {parametres.data && (
@@ -205,11 +221,94 @@ export function ParametresScreen() {
                 </p>
               </div>
             )}
+          </div>
+        )}
 
+        {parametres.data && (
+          <div style={{ background: C.white, border: `1px solid ${C.line}`, borderRadius: 12, padding: 16 }}>
+            <h2 style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 17, color: C.ink, margin: "0 0 4px" }}>Pronote</h2>
+            <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: "0 0 14px" }}>
+              Fenêtre de synchronisation et état de la connexion au service Pronote.
+            </p>
+
+            <div style={{ background: C.paperDim, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14, marginBottom: 14 }}>
+              <div className="flex items-center gap-2">
+                {parametres.data.pronote_jeton_present ? (
+                  <CheckCircle2 size={15} color={C.spectral} />
+                ) : (
+                  <XCircle size={15} color={C.brick} />
+                )}
+                <span style={{ fontFamily: uiFont, fontSize: 13, fontWeight: 700, color: parametres.data.pronote_jeton_present ? C.spectral : C.brick }}>
+                  {parametres.data.pronote_jeton_present ? "Jeton de connexion présent" : "Aucun jeton de connexion"}
+                </span>
+              </div>
+              {!parametres.data.pronote_jeton_present && (
+                <p style={{ fontFamily: uiFont, fontSize: 12, color: C.inkFaint, margin: "4px 0 0" }}>
+                  Lance la procédure de première connexion (voir Services/README.md) pour l'activer.
+                </p>
+              )}
+
+              <div style={{ height: 1, background: C.line, margin: "10px 0" }} />
+
+              {derniereSync.loading && <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: 0 }}>Vérification de la dernière synchronisation…</p>}
+              {!derniereSync.loading && !derniereSync.data && (
+                <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: 0 }}>Aucune synchronisation lancée pour l'instant.</p>
+              )}
+              {derniereSync.data && (
+                <>
+                  <div className="flex items-center gap-2">
+                    {derniereSync.data.erreur ? (
+                      <XCircle size={14} color={C.brick} />
+                    ) : (
+                      <CheckCircle2 size={14} color={C.spectral} />
+                    )}
+                    <span style={{ fontFamily: uiFont, fontSize: 12.5, fontWeight: 700, color: derniereSync.data.erreur ? C.brick : C.spectral }}>
+                      Dernière synchronisation {derniereSync.data.erreur ? "en échec" : "réussie"}
+                    </span>
+                  </div>
+                  <p style={{ fontFamily: uiFont, fontSize: 12, color: C.inkSoft, margin: "4px 0 0" }}>
+                    {formatDateHeure(derniereSync.data.finished_at || derniereSync.data.started_at)}
+                    {!derniereSync.data.erreur && ` · ${derniereSync.data.nouveaux_cours} cours, ${derniereSync.data.nouveaux_devoirs} devoirs, ${derniereSync.data.nouveaux_documents} documents`}
+                  </p>
+                  {derniereSync.data.erreur && (
+                    <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "4px 0 0" }}>{derniereSync.data.erreur}</p>
+                  )}
+                </>
+              )}
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div>
+                <label style={labelStyle}>URL PRONOTE</label>
+                <input value={pronoteUrl} onChange={(e) => setPronoteUrl(e.target.value)} placeholder="https://XXXX.index-education.net/pronote/eleve.html" style={inputStyle} />
+                <p style={{ fontFamily: uiFont, fontSize: 11.5, color: C.inkFaint, margin: "4px 0 0" }}>
+                  Sert seulement à vérifier que Pronote est configuré : l'adresse réellement utilisée pour se
+                  connecter est celle enregistrée dans le jeton (voir procédure de première connexion).
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <div style={{ flex: 1 }}>
+                  <label style={labelStyle}>JOURS EN ARRIÈRE</label>
+                  <input type="number" min={0} value={syncDaysBack} onChange={(e) => setSyncDaysBack(e.target.value)} style={inputStyle} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={labelStyle}>JOURS EN AVANT</label>
+                  <input type="number" min={0} value={syncDaysForward} onChange={(e) => setSyncDaysForward(e.target.value)} style={inputStyle} />
+                </div>
+              </div>
+              <p style={{ fontFamily: uiFont, fontSize: 11.5, color: C.inkFaint, margin: 0 }}>
+                Fenêtre récupérée à chaque synchronisation autour d'aujourd'hui (ex. 3 jours en arrière, 10 en avant).
+              </p>
+            </div>
+          </div>
+        )}
+
+        {parametres.data && (
+          <div>
             <button
               onClick={enregistrer}
               disabled={saving}
-              style={{ marginTop: 16, background: C.haunt, color: C.onAccent, border: "none", borderRadius: 10, padding: "9px 20px", fontFamily: uiFont, fontSize: 13, fontWeight: 700, cursor: saving ? "default" : "pointer", opacity: saving ? 0.7 : 1 }}
+              style={{ background: C.haunt, color: C.onAccent, border: "none", borderRadius: 10, padding: "9px 20px", fontFamily: uiFont, fontSize: 13, fontWeight: 700, cursor: saving ? "default" : "pointer", opacity: saving ? 0.7 : 1 }}
             >
               {saving ? "Enregistrement…" : "Enregistrer"}
             </button>

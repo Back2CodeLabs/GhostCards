@@ -62,6 +62,13 @@ Le script confirme la connexion et écrit `BackEnd/secrets/credentials.json`.
 Le QR code n'est valable que quelques minutes : s'il a expiré, régénère-en
 un nouveau sur Pronote et relance la commande.
 
+L'écran admin "Paramétrage" affiche l'état de cette connexion (jeton
+présent ou non, date et résultat de la dernière synchronisation) et
+permet de modifier à chaud la fenêtre de récupération (`SYNC_DAYS_BACK`/
+`SYNC_DAYS_FORWARD` dans `.env` au départ, puis table `parametres`) —
+mais pas le jeton lui-même, qui reste géré uniquement via cette procédure
+de première connexion.
+
 Connexion directe à Pronote (pas d'ENT) : c'est exactement ce que fait
 `get_client()` dans `pronote_sync.py`, aucune adaptation n'est nécessaire.
 

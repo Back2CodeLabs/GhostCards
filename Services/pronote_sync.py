@@ -27,7 +27,7 @@ import os
 import re
 import shutil
 import time
-from datetime import date, timedelta, datetime
+from datetime import date, timedelta, datetime, timezone
 from pathlib import Path
 
 import pronotepy
@@ -49,7 +49,10 @@ class SyncError(Exception):
 
 
 def _now() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    # UTC explicite (voir Services/db.py::now_iso) : l'OptiPlex tourne en
+    # UTC, un horodatage naïf serait ré-interprété à tort comme étant déjà
+    # dans le fuseau du navigateur qui l'affiche, décalant les heures.
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _stable_key(*parts) -> str:
@@ -71,13 +74,42 @@ def _safe_filename(name: str) -> str:
     return name[:150] or "fichier"
 
 
-def get_client() -> pronotepy.Client:
+def config_pronote(conn) -> dict:
+    """
+    Résout la configuration Pronote effective : valeurs enregistrées via
+    l'écran admin "Paramétrage" (table `parametres`) si elles existent,
+    sinon les valeurs de départ définies dans .env (Services/config.py).
+    Le jeton de connexion (secrets/credentials.json) n'est PAS géré ici :
+    il se régénère via la procédure de première connexion (voir README),
+    pas depuis un champ texte de l'écran admin.
+    """
+    def _int_parametre(cle: str, defaut: int) -> int:
+        valeur = db.get_parametre(conn, cle)
+        try:
+            return int(valeur) if valeur is not None else defaut
+        except ValueError:
+            return defaut
+
+    return {
+        "pronote_url": db.get_parametre(conn, "pronote_url", PRONOTE_URL) or PRONOTE_URL,
+        "sync_days_back": _int_parametre("sync_days_back", SYNC_DAYS_BACK),
+        "sync_days_forward": _int_parametre("sync_days_forward", SYNC_DAYS_FORWARD),
+    }
+
+
+def get_client(pronote_url: str) -> pronotepy.Client:
     """
     Se connecte à Pronote avec le jeton stocké localement et le fait pivoter
     immédiatement (obligatoire : un jeton pronotepy ne sert qu'une fois).
+
+    `pronote_url` ne sert qu'à vérifier que Pronote est bien configuré :
+    l'adresse réellement utilisée pour la connexion est celle enregistrée
+    dans le jeton lui-même (pronotepy l'y inclut à l'export), pas cette
+    valeur — modifier l'URL ici ne "redirige" donc pas vers un autre
+    établissement, il faudrait relancer la procédure de première connexion.
     """
-    if not PRONOTE_URL:
-        raise SyncError("PRONOTE_URL n'est pas configurée (voir .env).")
+    if not pronote_url:
+        raise SyncError("PRONOTE_URL n'est pas configurée (écran admin Paramétrage, ou .env).")
     if not CREDENTIALS_PATH.exists():
         raise SyncError(
             f"Aucun identifiant trouvé à {CREDENTIALS_PATH}. "
@@ -151,6 +183,27 @@ def _store_document(conn, *, cours_id=None, devoir_id=None, nom_fichier, chemin_
     )
 
 
+def _resume_resultat(counters: dict) -> str:
+    """
+    Détail lisible (rendu en markdown léger par le frontend, voir
+    FrontEnd/src/components/ResultatFormatte.jsx) plutôt que le seul
+    compte — sinon "3 nouveaux cours" ne dit pas lesquels.
+    """
+    lignes = [
+        f"{counters['nouveaux_cours']} nouveaux cours, {counters['nouveaux_devoirs']} devoirs, "
+        f"{counters['nouveaux_documents']} documents",
+    ]
+    if counters["detail_cours"]:
+        lignes.append("")
+        lignes.append("**Nouveaux cours**")
+        lignes.extend(f"- {ligne}" for ligne in counters["detail_cours"])
+    if counters["detail_devoirs"]:
+        lignes.append("")
+        lignes.append("**Nouveaux devoirs**")
+        lignes.extend(f"- {ligne}" for ligne in counters["detail_devoirs"])
+    return "\n".join(lignes)
+
+
 def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
     """
     Lance une synchronisation complète. Retourne un résumé (compteurs).
@@ -171,19 +224,27 @@ def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
     """
     db.init_db()
     started_at = _now()
-    counters = {"nouveaux_cours": 0, "nouveaux_devoirs": 0, "nouveaux_documents": 0}
+    counters = {
+        "nouveaux_cours": 0, "nouveaux_devoirs": 0, "nouveaux_documents": 0,
+        # Détail lisible de chaque nouveauté (pas juste le compteur) — voir
+        # `_sync_lessons`/`_sync_homework`, affiché dans le RÉSULTAT du
+        # traitement pour savoir précisément ce qui a été importé.
+        "detail_cours": [], "detail_devoirs": [],
+    }
     erreur = None
+    with db.session() as conn:
+        cfg = config_pronote(conn)
 
     try:
         with db.log_traitement("pronote_sync", "sync", 0, traitement_id=traitement_id) as ctx:
             ctx.moteur = "pronotepy"
 
             t0 = time.monotonic()
-            client = get_client()
+            client = get_client(cfg["pronote_url"])
             ctx.etape("connexion", detail="Connexion à Pronote (jeton pivoté)", duree_ms=int((time.monotonic() - t0) * 1000))
 
-            date_from = date.today() - timedelta(days=SYNC_DAYS_BACK)
-            date_to = date.today() + timedelta(days=SYNC_DAYS_FORWARD)
+            date_from = date.today() - timedelta(days=cfg["sync_days_back"])
+            date_to = date.today() + timedelta(days=cfg["sync_days_forward"])
 
             t1 = time.monotonic()
             with db.session() as conn:
@@ -199,7 +260,7 @@ def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
                 _sync_homework(conn, client, date_from, date_to, counters)
             ctx.etape("devoirs", detail=f"{counters['nouveaux_devoirs']} nouveau(x) devoir(s)", duree_ms=int((time.monotonic() - t2) * 1000))
 
-            ctx.resultat = f"{counters['nouveaux_cours']} nouveaux cours, {counters['nouveaux_devoirs']} devoirs, {counters['nouveaux_documents']} documents"
+            ctx.resultat = _resume_resultat(counters)
     except Exception as e:  # noqa: BLE001 — déjà journalisé dans `traitements` par db.log_traitement
         log.exception("Échec de la synchronisation Pronote")
         erreur = str(e)
@@ -252,6 +313,10 @@ def _sync_lessons(conn, client, date_from, date_to, fetch_content, counters):
             cours_id = cur.lastrowid
             already_fetched = False
             counters["nouveaux_cours"] += 1
+            ligne = f"{subject.name} — {lesson.start.strftime('%d/%m %H:%M')}"
+            if teacher:
+                ligne += f" ({teacher})"
+            counters["detail_cours"].append(ligne)
         else:
             cours_id = row["id"]
             already_fetched = bool(row["contenu_recupere"])
@@ -311,6 +376,10 @@ def _sync_homework(conn, client, date_from, date_to, counters):
         )
         devoir_id = cur.lastrowid
         counters["nouveaux_devoirs"] += 1
+        ligne = f"{subject.name} — pour le {hw.date.strftime('%d/%m/%Y')}"
+        if description:
+            ligne += f" : {description[:80]}{'…' if len(description) > 80 else ''}"
+        counters["detail_devoirs"].append(ligne)
 
         dest_dir = DOCUMENTS_DIR / _slugify(subject.name) / "devoirs"
         for f in getattr(hw, "files", []):

@@ -43,6 +43,10 @@ from Services.config import (  # noqa: E402
     OLLAMA_MODEL,
     GEMINI_MODEL,
     ANTHROPIC_API_KEY,
+    PRONOTE_URL,
+    CREDENTIALS_PATH,
+    SYNC_DAYS_BACK,
+    SYNC_DAYS_FORWARD,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -337,7 +341,7 @@ def create_note(cours_id: int, payload: NoteCreate, request: Request):
         conn.execute(
             """INSERT INTO notes_eleves (cours_id, eleve_id, auteur, contenu, type, created_at)
                VALUES (?, ?, ?, ?, ?, ?)""",
-            (cours_id, eleve["id"], eleve["nom"], contenu, payload.type, datetime.now().isoformat(timespec="seconds")),
+            (cours_id, eleve["id"], eleve["nom"], contenu, payload.type, db.now_iso()),
         )
     return {"ok": True}
 
@@ -381,7 +385,7 @@ def create_note_photo(cours_id: int, request: Request, background_tasks: Backgro
         cur = conn.execute(
             """INSERT INTO notes_eleves (cours_id, eleve_id, auteur, chemin_fichier, type, statut, created_at)
                VALUES (?, ?, ?, ?, ?, 'traitement', ?)""",
-            (cours_id, eleve["id"], eleve["nom"], chemin_relatif, type_note, datetime.now().isoformat(timespec="seconds")),
+            (cours_id, eleve["id"], eleve["nom"], chemin_relatif, type_note, db.now_iso()),
         )
         note_id = cur.lastrowid
 
@@ -473,6 +477,7 @@ def get_parametres(request: Request):
         gemini_model = db.get_parametre(conn, "gemini_model", GEMINI_MODEL)
         gemini_key = db.get_parametre(conn, "gemini_api_key", "")
         anthropic_key = db.get_parametre(conn, "anthropic_api_key", ANTHROPIC_API_KEY)
+        pronote_cfg = pronote_sync.config_pronote(conn)
     return {
         "ia_moteur": moteur if moteur in ("ollama", "gemini", "claude") else "ollama",
         "ollama_url": ollama_url or OLLAMA_URL,
@@ -480,6 +485,10 @@ def get_parametres(request: Request):
         "gemini_model": gemini_model or GEMINI_MODEL,
         "gemini_api_key_configuree": bool(gemini_key),
         "anthropic_api_key_configuree": bool(anthropic_key),
+        "pronote_url": pronote_cfg["pronote_url"],
+        "sync_days_back": pronote_cfg["sync_days_back"],
+        "sync_days_forward": pronote_cfg["sync_days_forward"],
+        "pronote_jeton_present": CREDENTIALS_PATH.exists(),
     }
 
 
@@ -508,6 +517,9 @@ class ParametresIA(BaseModel):
     gemini_model: str | None = None
     gemini_api_key: str | None = None  # None = ne pas changer ; chaîne vide = effacer
     anthropic_api_key: str | None = None  # idem
+    pronote_url: str | None = None
+    sync_days_back: int | None = None
+    sync_days_forward: int | None = None
 
 
 @app.put("/api/parametres")
@@ -515,6 +527,10 @@ def set_parametres(payload: ParametresIA, request: Request):
     _require_admin(request)
     if payload.ia_moteur not in ("ollama", "gemini", "claude"):
         raise HTTPException(400, "Moteur invalide (attendu 'ollama', 'gemini' ou 'claude').")
+    if payload.sync_days_back is not None and payload.sync_days_back < 0:
+        raise HTTPException(400, "Le nombre de jours en arrière doit être positif.")
+    if payload.sync_days_forward is not None and payload.sync_days_forward < 0:
+        raise HTTPException(400, "Le nombre de jours en avant doit être positif.")
     with db.session() as conn:
         db.set_parametre(conn, "ia_moteur", payload.ia_moteur)
         if payload.ollama_url:
@@ -527,6 +543,12 @@ def set_parametres(payload: ParametresIA, request: Request):
             db.set_parametre(conn, "gemini_api_key", payload.gemini_api_key)
         if payload.anthropic_api_key is not None:
             db.set_parametre(conn, "anthropic_api_key", payload.anthropic_api_key)
+        if payload.pronote_url:
+            db.set_parametre(conn, "pronote_url", payload.pronote_url)
+        if payload.sync_days_back is not None:
+            db.set_parametre(conn, "sync_days_back", str(payload.sync_days_back))
+        if payload.sync_days_forward is not None:
+            db.set_parametre(conn, "sync_days_forward", str(payload.sync_days_forward))
     return {"ok": True}
 
 
