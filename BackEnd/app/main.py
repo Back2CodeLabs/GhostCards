@@ -36,6 +36,7 @@ from Services.config import (  # noqa: E402
     BASE_URL,
     SESSION_SECRET_KEY,
     GOOGLE_HOSTED_DOMAIN,
+    GOOGLE_CLIENT_ID,
     AUTHORIZED_EMAILS,
     ADMIN_PASSWORD,
     IA_ENGINE,
@@ -144,6 +145,19 @@ def _email_autorise(email: str) -> bool:
 
 @app.get("/auth/login")
 async def auth_login(request: Request):
+    if not GOOGLE_CLIENT_ID:
+        # Sans ça, authlib part quand même vers Google avec un client_id
+        # vide, qui répond "Erreur 400 : invalid_request — Missing required
+        # parameter: client_id" — techniquement correct mais incompréhensible
+        # pour un élève. Voir Services/README.md, section "Créer les
+        # identifiants Google OAuth", pour configurer GOOGLE_CLIENT_ID/
+        # GOOGLE_CLIENT_SECRET dans .env (la consultation du site reste
+        # libre sans connexion : seul le dépôt de notes en a besoin).
+        raise HTTPException(
+            503,
+            "Connexion Google non configurée sur ce serveur (GOOGLE_CLIENT_ID manquant dans .env) — "
+            "voir Services/README.md, section « Créer les identifiants Google OAuth ».",
+        )
     redirect_uri = f"{BASE_URL}/auth/callback"
     kwargs = {"hd": GOOGLE_HOSTED_DOMAIN} if GOOGLE_HOSTED_DOMAIN else {}
     return await oauth.google.authorize_redirect(request, redirect_uri, **kwargs)
