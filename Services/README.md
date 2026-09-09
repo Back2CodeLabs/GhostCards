@@ -117,8 +117,8 @@ et fait aussi tourner l'assistant conversationnel — **les deux passent
 par le même moteur**. Trois moteurs possibles : Ollama local (par
 défaut, gratuit), Claude (Anthropic) ou Gemini (Google). Le choix, l'URL
 et le modèle Ollama, les modèles Claude/Gemini et leurs clés se
-changent **à chaud depuis l'écran admin "Paramétrage"** (un seul bloc
-"Assistant IA" qui regroupe les trois), sans redémarrer le service —
+changent **à chaud depuis le sous-menu "Génération IA" de l'écran admin
+"Paramétrage"**, sans redémarrer le service —
 `.env` (`IA_ENGINE`, `OLLAMA_URL`, `OLLAMA_MODEL`, `ANTHROPIC_API_KEY`,
 `GEMINI_API_KEY`) ne sert que de valeur de départ. Un bouton "Détecter"
 interroge `{url}/api/tags` sur le serveur Ollama choisi pour proposer la
@@ -135,6 +135,17 @@ réaliste pour une classe.
 Génération déclenchée depuis le bouton "Générer" sur la page d'un cours
 — aucune commande manuelle nécessaire. Compter jusqu'à ~30 minutes pour
 un cours complet avec `qwen3:14b` en CPU : normal, pas un bug.
+
+Un cours dont le texte source (description + documents transcrits)
+dépasse `IA_TEXTE_MAX_CHARS` (12000 par défaut) n'est plus tronqué
+silencieusement : il est découpé en plusieurs parties, chacune résumée
+séparément ("map"), puis les résumés sont fusionnés pour servir de texte
+source à la génération finale ("reduce") — voir
+`Services/ia_generation.py::_texte_pour_prompt`. Chaque passe (découpage,
+résumé de chaque partie, fusion) est journalisée comme une étape à part
+dans `traitements`, visible dans l'écran "Traitements" au même titre que
+le résultat final — utile pour vérifier ce qui a réellement été transmis
+au modèle sur un cours long.
 
 **Accès à l'assistant** : désactivé par défaut pour un compte élève,
 à activer au cas par cas depuis l'écran admin "Élèves" (bouton bascule).

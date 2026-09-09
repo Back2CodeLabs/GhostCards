@@ -1,4 +1,4 @@
-import { ArrowLeft, Ghost, RefreshCw, WifiOff, Sparkles, FileText } from "lucide-react";
+import { ArrowLeft, Ghost, RefreshCw, WifiOff, Sparkles, FileText, TriangleAlert } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 
 /* ------------------------------------------------------------------ */
@@ -73,6 +73,35 @@ export function SectionLabel({ children }) {
 export function Divider() {
   const { C } = useTheme();
   return <div style={{ height: 1, background: C.line, margin: "16px 20px" }} />;
+}
+
+/* ------------------------------------------------------------------ */
+/* Points de vigilance connus sur la génération IA / transcription OCR — */
+/* liste à COMPLÉTER à chaque fois qu'un nouveau cas de mauvaise         */
+/* interprétation est identifié (voir Tests/), pour que l'avertissement  */
+/* affiché aux élèves/à l'admin reste à jour plutôt qu'une formule vague.*/
+/* ------------------------------------------------------------------ */
+
+export const LIMITES_IA_CONNUES = [
+  "Notations mathématiques (racines, exposants, fractions, symboles ∈/∉) : risque d'erreur plus élevé, en particulier avec un moteur OCR généraliste (PaddleOCR) qui ne comprend pas le sens mathématique du texte.",
+  "Schémas et diagrammes (ensembles emboîtés, figures géométriques) : seul le texte isolé (lettres, légendes) est récupéré — les relations visuelles entre les éléments (inclusion, position) sont perdues.",
+];
+
+export function AvertissementIA({ intro }) {
+  const { C } = useTheme();
+  return (
+    <div style={{ background: C.brickSoft, borderRadius: 10, padding: "11px 14px", display: "flex", gap: 10, alignItems: "flex-start" }}>
+      <TriangleAlert size={16} color={C.brick} style={{ flexShrink: 0, marginTop: 1 }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.ink, lineHeight: 1.5, margin: 0 }}>{intro}</p>
+        <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+          {LIMITES_IA_CONNUES.map((limite, i) => (
+            <li key={i} style={{ fontFamily: uiFont, fontSize: 11.5, color: C.inkSoft, lineHeight: 1.45, marginBottom: 3 }}>{limite}</li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
 }
 
 /* ------------------------------------------------------------------ */

@@ -260,6 +260,11 @@ export function TraitementDetail({ traitementId, onBack }) {
                         {e.moteur && !e.label.toLowerCase().includes(e.moteur.toLowerCase()) ? ` (${e.moteur})` : ""}
                       </div>
                       {e.detail && <div style={{ fontSize: 12, color: C.inkSoft, marginTop: 2 }}>{e.detail}</div>}
+                      {e.resultat && (
+                        <div style={{ marginTop: 8, background: C.paperDim, border: `1px solid ${C.line}`, borderRadius: 8, padding: 10, overflowX: "auto" }}>
+                          <ResultatFormatte texte={e.resultat} />
+                        </div>
+                      )}
                     </div>
                     {e.duree_ms != null && (
                       <div style={{ fontSize: 11, color: C.inkFaint, flexShrink: 0, whiteSpace: "nowrap" }}>{formatDuree(e.duree_ms)}</div>

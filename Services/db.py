@@ -67,6 +67,13 @@ def init_db() -> None:
         _ensure_column(conn, "cours", "ia_flashcards", "TEXT")
         _ensure_column(conn, "cours", "ia_quiz", "TEXT")
         _ensure_column(conn, "cours", "ia_erreur", "TEXT")
+        # Texte source effectivement utilisé pour la génération initiale
+        # (après découpage/résumé éventuel, voir
+        # Services/ia_generation.py::_texte_pour_prompt) — mémorisé pour que
+        # "+ 10 flashcards & quiz" réutilise exactement le même contenu au
+        # lieu de relire les documents et de recalculer un résumé différent
+        # à chaque clic.
+        _ensure_column(conn, "cours", "ia_texte_source", "TEXT")
         # Détail des étapes internes d'un traitement (ex. pdftotext puis
         # bascule OCR page par page) — JSON, voir log_traitement ci-dessous.
         _ensure_column(conn, "traitements", "etapes", "TEXT")
@@ -140,6 +147,10 @@ def log_traitement(type_: str, cible_type: str, cible_id: int, *, traitement_id:
     intermédiaires via `ctx.etape(label, ...)` (ex. "pdftotext" puis
     "ocr page 1/3") — visibles dans l'écran admin même si le traitement
     échoue en cours de route, pour comprendre jusqu'où il est allé.
+    `ctx.etape(..., resultat=...)` attache en plus un contenu (ex. le
+    texte source lu pour cette étape), rendu comme `ctx.resultat` côté
+    frontend — utile pour vérifier ce qui a réellement été envoyé au
+    modèle, pas juste sa longueur.
 
     `traitement_id` : passe une ligne déjà créée (typiquement par l'API,
     avant de lancer le travail en arrière-plan) plutôt que d'en créer une
@@ -157,10 +168,10 @@ def log_traitement(type_: str, cible_type: str, cible_id: int, *, traitement_id:
             self.etapes = []
 
         def etape(self, label: str, *, statut: str = "succes", detail: str | None = None,
-                   duree_ms: int | None = None, moteur: str | None = None) -> None:
+                   duree_ms: int | None = None, moteur: str | None = None, resultat: str | None = None) -> None:
             self.etapes.append({
                 "label": label, "statut": statut, "detail": detail,
-                "duree_ms": duree_ms, "moteur": moteur,
+                "duree_ms": duree_ms, "moteur": moteur, "resultat": resultat,
             })
 
     ctx = _Ctx()

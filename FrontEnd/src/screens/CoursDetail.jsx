@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { FileText, Download, LogIn, Paperclip, Sparkles, RefreshCw, Loader2, Ghost } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 import { API_BASE, useApi } from "../api";
-import { Loading, ApiError, ScreenHeader } from "../components/Shared";
+import { Loading, ApiError, ScreenHeader, AvertissementIA } from "../components/Shared";
 
 /* ------------------------------------------------------------------ */
 /* Détail cours                                                         */
@@ -123,6 +123,10 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin }) {
 
   const c = cours.data;
   const sansContenu = c.documents.length === 0 && c.notes.length === 0;
+  // La section IA (résultat ou invite à générer) ne s'affiche pas quand il
+  // n'y a rien à partir de quoi générer (voir plus bas) — l'avertissement
+  // ne doit apparaître que si cette section, elle, s'affiche.
+  const sectionIAVisible = !!c.ia_resume || !(sansContenu && (!c.ia_statut || c.ia_statut === "absent"));
 
   return (
     <div style={{ paddingBottom: 28 }}>
@@ -171,6 +175,11 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin }) {
         <p style={{ fontFamily: uiFont, fontSize: 11.5, fontWeight: 700, color: C.inkFaint, letterSpacing: 0.3, margin: "20px 0 8px" }}>
           NOTES DES ÉLÈVES ({c.notes.length})
         </p>
+        {c.notes.some((n) => n.type !== "texte" && n.type !== "markdown") && (
+          <div style={{ marginBottom: 10 }}>
+            <AvertissementIA intro="Notes transcrites automatiquement à partir d'une photo ou d'un PDF déposé : la transcription peut contenir des erreurs." />
+          </div>
+        )}
         {c.notes.length === 0 && (
           <p style={{ fontFamily: uiFont, fontSize: 13, color: C.inkFaint }}>Personne n'a encore partagé de notes pour ce cours.</p>
         )}
@@ -256,8 +265,14 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin }) {
           </button>
         )}
 
-        {c.ia_resume ? (
+        {sectionIAVisible && (
           <div style={{ marginTop: 22 }}>
+            <AvertissementIA intro="Contenu généré automatiquement par une IA : il peut contenir des erreurs ou des approximations — vérifie les informations importantes." />
+          </div>
+        )}
+
+        {c.ia_resume ? (
+          <div style={{ marginTop: 16 }}>
             <p style={{ fontFamily: uiFont, fontSize: 11.5, fontWeight: 700, color: C.inkFaint, letterSpacing: 0.3, margin: "0 0 8px" }}>RÉSUMÉ IA</p>
             <div style={{ background: C.white, border: `1px solid ${C.line}`, borderRadius: 12, padding: 16 }}>
               <p style={{ fontFamily: uiFont, fontSize: 14, color: C.ink, lineHeight: 1.55, margin: 0, whiteSpace: "pre-wrap" }}>
@@ -329,7 +344,7 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin }) {
             {completingError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "8px 0 0" }}>{completingError}</p>}
           </div>
         ) : sansContenu && (!c.ia_statut || c.ia_statut === "absent") ? null : (
-          <div style={{ marginTop: 22, background: C.hauntSoft, borderRadius: 12, padding: 16, display: "flex", gap: 12, alignItems: "flex-start" }}>
+          <div style={{ marginTop: 16, background: C.hauntSoft, borderRadius: 12, padding: 16, display: "flex", gap: 12, alignItems: "flex-start" }}>
             <Ghost size={20} color={C.haunt} style={{ flexShrink: 0, marginTop: 2 }} />
             <div style={{ flex: 1 }}>
               {c.ia_statut === "en_cours" && (

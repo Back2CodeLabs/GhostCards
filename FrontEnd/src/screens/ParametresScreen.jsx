@@ -33,6 +33,7 @@ export function ParametresScreen() {
   const [moteur, setMoteur] = useState("ollama");
   const [ollamaUrl, setOllamaUrl] = useState("");
   const [ollamaModel, setOllamaModel] = useState("");
+  const [ollamaChunkSize, setOllamaChunkSize] = useState("");
   const [ollamaModeles, setOllamaModeles] = useState([]);
   const [ollamaModelesLoading, setOllamaModelesLoading] = useState(false);
   const [ollamaModelesError, setOllamaModelesError] = useState(null);
@@ -52,6 +53,7 @@ export function ParametresScreen() {
       setMoteur(parametres.data.ia_moteur);
       setOllamaUrl(parametres.data.ollama_url || "");
       setOllamaModel(parametres.data.ollama_model || "");
+      setOllamaChunkSize(String(parametres.data.ollama_chunk_size ?? ""));
       setGeminiModel(parametres.data.gemini_model || "");
       setPronoteUrl(parametres.data.pronote_url || "");
       setSyncDaysBack(String(parametres.data.sync_days_back ?? ""));
@@ -90,6 +92,7 @@ export function ParametresScreen() {
         ia_moteur: moteur,
         ollama_url: ollamaUrl.trim() || null,
         ollama_model: ollamaModel.trim() || null,
+        ollama_chunk_size: ollamaChunkSize.trim() ? parseInt(ollamaChunkSize, 10) : null,
         gemini_model: geminiModel || null,
         pronote_url: pronoteUrl.trim() || null,
         sync_days_back: syncDaysBack.trim() ? parseInt(syncDaysBack, 10) : null,
@@ -279,6 +282,17 @@ export function ParametresScreen() {
                 <p style={{ fontFamily: uiFont, fontSize: 12, color: C.inkFaint, margin: 0 }}>
                   "Détecter" interroge {ollamaUrl.trim() || "l'URL ci-dessus"} pour lister les modèles déjà installés
                   (<code>ollama pull …</code> sur le serveur pour en ajouter un nouveau).
+                </p>
+
+                <div>
+                  <label style={labelStyle}>TAILLE DE DÉCOUPAGE (CARACTÈRES)</label>
+                  <input type="number" min={1000} step={1000} value={ollamaChunkSize} onChange={(e) => setOllamaChunkSize(e.target.value)} placeholder="12000" style={inputStyle} />
+                </div>
+                <p style={{ fontFamily: uiFont, fontSize: 12, color: C.inkFaint, margin: 0 }}>
+                  Ollama tourne en local avec un contexte limité par le matériel : un cours dont le texte dépasse
+                  cette taille est découpé en plusieurs parties, chacune résumée séparément, avant la génération
+                  finale (visible étape par étape dans "Traitements"). Sans objet pour Claude/Gemini, qui reçoivent
+                  toujours le cours en entier en un seul appel.
                 </p>
               </div>
             )}

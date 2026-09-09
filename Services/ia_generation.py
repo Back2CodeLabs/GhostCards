@@ -71,6 +71,11 @@ def config_ia(conn) -> dict:
     moteur = db.get_parametre(conn, "ia_moteur", IA_ENGINE)
     if moteur not in ("ollama", "gemini", "claude"):
         moteur = "ollama"
+    ollama_chunk_size = db.get_parametre(conn, "ollama_chunk_size")
+    try:
+        ollama_chunk_size = int(ollama_chunk_size) if ollama_chunk_size is not None else IA_TEXTE_MAX_CHARS
+    except ValueError:
+        ollama_chunk_size = IA_TEXTE_MAX_CHARS
     return {
         "moteur": moteur,
         "anthropic_api_key": db.get_parametre(conn, "anthropic_api_key", ANTHROPIC_API_KEY),
@@ -78,6 +83,12 @@ def config_ia(conn) -> dict:
         "gemini_model": db.get_parametre(conn, "gemini_model", GEMINI_MODEL) or GEMINI_MODEL,
         "ollama_url": db.get_parametre(conn, "ollama_url", OLLAMA_URL) or OLLAMA_URL,
         "ollama_model": db.get_parametre(conn, "ollama_model", OLLAMA_MODEL) or OLLAMA_MODEL,
+        # Taille max (caractères) envoyée à Ollama en un seul appel — au-delà,
+        # le texte source est découpé en plusieurs parties résumées (voir
+        # `_texte_pour_prompt`). Ollama local a un contexte limité par le
+        # matériel ; Claude et Gemini acceptent un contexte bien plus grand,
+        # donc ce découpage ne s'applique qu'à Ollama (voir `_texte_pour_prompt`).
+        "ollama_chunk_size": ollama_chunk_size,
     }
 
 
@@ -353,6 +364,12 @@ def repondre_conversation(messages: list[dict], system_prompt: str, cfg: dict) -
 
 
 def _texte_source(conn, cours: dict) -> str:
+    """
+    Texte complet (description + documents transcrits), SANS troncature :
+    un cours long doit pouvoir être découpé en plusieurs passes (voir
+    `_texte_pour_prompt`) plutôt que de perdre silencieusement tout ce qui
+    dépasse `IA_TEXTE_MAX_CHARS`.
+    """
     morceaux = []
     if cours.get("description"):
         morceaux.append(cours["description"])
@@ -361,7 +378,102 @@ def _texte_source(conn, cours: dict) -> str:
         (cours["id"],),
     ).fetchall()
     morceaux.extend(d["texte_extrait"] for d in docs if d["texte_extrait"])
-    return "\n\n".join(morceaux)[:IA_TEXTE_MAX_CHARS]
+    return "\n\n".join(morceaux)
+
+
+CHUNK_SYSTEM_PROMPT = (
+    "Tu résumes un extrait de cours pour un usage pédagogique. Produis un "
+    "résumé dense et fidèle de tout le contenu factuel de cet extrait "
+    "(définitions, notions clés, exemples importants), en français, en "
+    "texte continu, sans titre, sans markdown, sans commentaire ni "
+    "reformulation de la consigne — réponds uniquement avec le résumé."
+)
+
+
+def _decouper_texte(texte: str, taille_max: int) -> list[str]:
+    """
+    Découpe `texte` en parties d'au plus `taille_max` caractères, sur des
+    frontières de paragraphe (ligne vide) plutôt qu'en coupant au milieu
+    d'une phrase. Renvoie `[texte]` tel quel s'il tient déjà dans une
+    seule partie — c'est le cas de la grande majorité des cours.
+    """
+    if len(texte) <= taille_max:
+        return [texte]
+    paragraphes = texte.split("\n\n")
+    parties = []
+    courante = ""
+    for p in paragraphes:
+        candidate = f"{courante}\n\n{p}" if courante else p
+        if len(candidate) > taille_max and courante:
+            parties.append(courante)
+            courante = p
+        else:
+            courante = candidate
+    if courante:
+        parties.append(courante)
+
+    # Un paragraphe (sans ligne vide interne) peut lui-même dépasser
+    # `taille_max` — la boucle ci-dessus ne le découpe pas puisqu'il n'y a
+    # aucune frontière où s'arrêter. On le tranche alors brutalement plutôt
+    # que de dépasser silencieusement la taille prévue pour un appel.
+    resultat = []
+    for partie in parties:
+        if len(partie) <= taille_max:
+            resultat.append(partie)
+        else:
+            resultat.extend(partie[i:i + taille_max] for i in range(0, len(partie), taille_max))
+    return resultat
+
+
+def _texte_pour_prompt(ctx, texte: str, cfg: dict) -> str:
+    """
+    Réduit `texte` à une taille exploitable en un seul appel de génération —
+    UNIQUEMENT pour Ollama, dont le contexte est limité par le matériel
+    local. Claude et Gemini acceptent un contexte largement suffisant pour
+    un cours entier : le texte leur est transmis tel quel, sans découpage
+    (aucun appel supplémentaire, aucune perte de qualité liée au découpage).
+
+    Pour Ollama, un cours qui tient déjà dans `cfg["ollama_chunk_size"]`
+    part tel quel. Un cours plus long est découpé en parties (voir
+    `_decouper_texte`), chacune résumée séparément ("map"), puis les
+    résumés sont concaténés ("reduce") pour servir de texte source à la
+    génération finale — stratégie "plusieurs passes", réglable depuis le
+    bloc Ollama de l'écran admin "Paramétrage" (sous-menu "Génération IA").
+
+    Chaque passe est journalisée via `ctx.etape(...)` (voir
+    Services/db.py::log_traitement) pour que l'admin voie, dans l'écran
+    "Traitements", le détail intermédiaire (chaque résumé de partie) et
+    pas seulement le résultat final.
+    """
+    if cfg["moteur"] != "ollama":
+        return texte
+
+    taille_max = cfg["ollama_chunk_size"]
+    parties = _decouper_texte(texte, taille_max)
+    if len(parties) == 1:
+        return parties[0]
+
+    ctx.etape(
+        "découpage", statut="info",
+        detail=(
+            f"{len(texte)} caractère(s) au total, trop long pour un seul appel "
+            f"({taille_max} max) : {len(parties)} partie(s)"
+        ),
+    )
+    resumes = []
+    for i, partie in enumerate(parties, start=1):
+        t0 = time.monotonic()
+        resume = repondre_conversation([{"role": "user", "text": partie}], CHUNK_SYSTEM_PROMPT, cfg)
+        resumes.append(resume)
+        ctx.etape(
+            f"résumé partie {i}/{len(parties)}", moteur=_nom_moteur(cfg),
+            duree_ms=int((time.monotonic() - t0) * 1000),
+            detail=f"{len(partie)} → {len(resume)} caractère(s)",
+            resultat=resume,
+        )
+    fusion = "\n\n".join(resumes)
+    ctx.etape("fusion des résumés", statut="info", detail=f"{len(fusion)} caractère(s) au total", resultat=fusion)
+    return fusion
 
 
 def generer_pour_cours(cours_id: int) -> None:
@@ -388,14 +500,19 @@ def generer_pour_cours(cours_id: int) -> None:
             )
         return
 
-    prompt = PROMPT_TEMPLATE.format(
-        nb_flashcards=FLASHCARDS_PAR_COURS, nb_quiz=QUESTIONS_QUIZ_PAR_COURS, texte=texte,
-    )
-
     try:
         with db.log_traitement("ia_generation", "cours", cours_id) as ctx:
             ctx.moteur = _nom_moteur(cfg)
-            ctx.etape("lecture du contenu source", detail=f"{len(texte)} caractère(s) (description + documents transcrits)")
+            ctx.etape(
+                "lecture du contenu source",
+                detail=f"{len(texte)} caractère(s) (description + documents transcrits)",
+                resultat=texte,
+            )
+
+            texte_pour_prompt = _texte_pour_prompt(ctx, texte, cfg)
+            prompt = PROMPT_TEMPLATE.format(
+                nb_flashcards=FLASHCARDS_PAR_COURS, nb_quiz=QUESTIONS_QUIZ_PAR_COURS, texte=texte_pour_prompt,
+            )
 
             t0 = time.monotonic()
             resultat = _appeler_ia(prompt, cfg)
@@ -414,13 +531,15 @@ def generer_pour_cours(cours_id: int) -> None:
     with db.session() as conn:
         conn.execute(
             """UPDATE cours
-               SET ia_statut = 'pret', ia_resume = ?, ia_resume_detaille = ?, ia_flashcards = ?, ia_quiz = ?, ia_erreur = NULL
+               SET ia_statut = 'pret', ia_resume = ?, ia_resume_detaille = ?, ia_flashcards = ?, ia_quiz = ?,
+                   ia_erreur = NULL, ia_texte_source = ?
                WHERE id = ?""",
             (
                 resultat.get("resume_court", resultat.get("resume", "")),
                 resultat.get("resume_detaille", ""),
                 json.dumps(resultat.get("flashcards", []), ensure_ascii=False),
                 json.dumps(resultat.get("quiz", []), ensure_ascii=False),
+                texte_pour_prompt,
                 cours_id,
             ),
         )
@@ -443,22 +562,46 @@ def completer_pour_cours(cours_id: int, n: int = N_COMPLEMENT) -> None:
         # possible (ia_statut vaudrait alors 'echec').
         if not cours.get("ia_flashcards"):
             raise GenerationError("Génère d'abord le résumé/flashcards/quiz avant de les compléter.")
-        texte = _texte_source(conn, cours)
+        texte_memorise = cours.get("ia_texte_source")
         cfg = config_ia(conn)
         flashcards_existantes = json.loads(cours["ia_flashcards"]) if cours["ia_flashcards"] else []
         quiz_existant = json.loads(cours["ia_quiz"]) if cours["ia_quiz"] else []
         conn.execute("UPDATE cours SET ia_statut = 'en_cours' WHERE id = ?", (cours_id,))
 
-    prompt = PROMPT_COMPLEMENT_TEMPLATE.format(
-        texte=texte, n=n,
-        questions_flashcards="; ".join(c["question"] for c in flashcards_existantes) or "(aucune)",
-        questions_quiz="; ".join(q["question"] for q in quiz_existant) or "(aucune)",
-    )
-
     try:
         with db.log_traitement("ia_completion", "cours", cours_id) as ctx:
             ctx.moteur = _nom_moteur(cfg)
+
+            if texte_memorise:
+                # Même texte que la génération initiale — pas de nouvel appel
+                # de découpage/résumé, et surtout pas de résumé DIFFÉRENT à
+                # chaque complément (le résumé d'une partie n'est pas
+                # déterministe d'un appel à l'autre).
+                ctx.etape(
+                    "lecture du contenu source",
+                    detail=f"{len(texte_memorise)} caractère(s) (identique à la génération initiale)",
+                    resultat=texte_memorise,
+                )
+                texte_pour_prompt = texte_memorise
+            else:
+                # Génération initiale antérieure à l'ajout de ce champ : pas
+                # de texte mémorisé, on retombe sur l'ancien comportement.
+                with db.session() as conn:
+                    texte_brut = _texte_source(conn, cours)
+                ctx.etape(
+                    "lecture du contenu source",
+                    detail=f"{len(texte_brut)} caractère(s) (description + documents transcrits)",
+                    resultat=texte_brut,
+                )
+                texte_pour_prompt = _texte_pour_prompt(ctx, texte_brut, cfg)
+
             ctx.etape("lecture de l'existant", detail=f"{len(flashcards_existantes)} flashcard(s), {len(quiz_existant)} question(s) déjà en place")
+
+            prompt = PROMPT_COMPLEMENT_TEMPLATE.format(
+                texte=texte_pour_prompt, n=n,
+                questions_flashcards="; ".join(c["question"] for c in flashcards_existantes) or "(aucune)",
+                questions_quiz="; ".join(q["question"] for q in quiz_existant) or "(aucune)",
+            )
 
             t0 = time.monotonic()
             resultat = _appeler_ia(prompt, cfg)

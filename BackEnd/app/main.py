@@ -271,6 +271,9 @@ def get_cours(cours_id: int):
         # décodés ici pour que le frontend reçoive de vraies structures, pas des chaînes.
         c["ia_flashcards"] = json.loads(c["ia_flashcards"]) if c.get("ia_flashcards") else []
         c["ia_quiz"] = json.loads(c["ia_quiz"]) if c.get("ia_quiz") else []
+        # ia_texte_source ne sert qu'en interne (voir completer_pour_cours) —
+        # pas besoin de l'envoyer au frontend, il peut être volumineux.
+        c.pop("ia_texte_source", None)
         return {
             **c,
             "documents": [dict(d) for d in documents],
@@ -477,12 +480,14 @@ def get_parametres(request: Request):
         gemini_model = db.get_parametre(conn, "gemini_model", GEMINI_MODEL)
         gemini_key = db.get_parametre(conn, "gemini_api_key", "")
         anthropic_key = db.get_parametre(conn, "anthropic_api_key", ANTHROPIC_API_KEY)
+        ollama_chunk_size = ia_generation.config_ia(conn)["ollama_chunk_size"]
         pronote_cfg = pronote_sync.config_pronote(conn)
         ocr_cfg = ocr.config_ocr(conn)
     return {
         "ia_moteur": moteur if moteur in ("ollama", "gemini", "claude") else "ollama",
         "ollama_url": ollama_url or OLLAMA_URL,
         "ollama_model": ollama_model or OLLAMA_MODEL,
+        "ollama_chunk_size": ollama_chunk_size,
         "gemini_model": gemini_model or GEMINI_MODEL,
         "gemini_api_key_configuree": bool(gemini_key),
         "anthropic_api_key_configuree": bool(anthropic_key),
@@ -516,6 +521,7 @@ class ParametresIA(BaseModel):
     ia_moteur: str
     ollama_url: str | None = None
     ollama_model: str | None = None
+    ollama_chunk_size: int | None = None
     gemini_model: str | None = None
     gemini_api_key: str | None = None  # None = ne pas changer ; chaîne vide = effacer
     anthropic_api_key: str | None = None  # idem
@@ -536,12 +542,16 @@ def set_parametres(payload: ParametresIA, request: Request):
         raise HTTPException(400, "Le nombre de jours en avant doit être positif.")
     if payload.ocr_engine is not None and payload.ocr_engine not in ("paddleocr", "claude"):
         raise HTTPException(400, "Moteur OCR invalide (attendu 'paddleocr' ou 'claude').")
+    if payload.ollama_chunk_size is not None and payload.ollama_chunk_size < 1000:
+        raise HTTPException(400, "La taille de découpage doit être d'au moins 1000 caractères.")
     with db.session() as conn:
         db.set_parametre(conn, "ia_moteur", payload.ia_moteur)
         if payload.ollama_url:
             db.set_parametre(conn, "ollama_url", payload.ollama_url)
         if payload.ollama_model:
             db.set_parametre(conn, "ollama_model", payload.ollama_model)
+        if payload.ollama_chunk_size is not None:
+            db.set_parametre(conn, "ollama_chunk_size", str(payload.ollama_chunk_size))
         if payload.gemini_model:
             db.set_parametre(conn, "gemini_model", payload.gemini_model)
         if payload.gemini_api_key is not None:
