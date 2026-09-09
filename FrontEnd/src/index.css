@@ -74,22 +74,40 @@ button {
   .gc-nav {
     order: 0;
     flex-direction: column;
+    align-self: stretch;
     width: 220px;
-    height: 100%;
     position: sticky;
     top: 0;
     justify-content: flex-start;
     padding-top: 12px;
-    gap: 2px;
+    gap: 6px;
     border-top: none !important;
   }
 
   .gc-nav button {
-    flex: none;
+    flex: none !important;
     flex-direction: row !important;
     justify-content: flex-start !important;
-    gap: 12px;
-    padding: 12px 22px !important;
+    gap: 14px;
+    padding: 13px 22px !important;
+  }
+
+  .gc-nav button svg {
+    width: 21px !important;
+    height: 21px !important;
+  }
+
+  .gc-nav button span {
+    font-size: 14.5px !important;
+  }
+
+  .gc-brand-icon {
+    width: 32px !important;
+    height: 32px !important;
+  }
+
+  .gc-brand-text {
+    font-size: 28px !important;
   }
 
   .gc-main {
