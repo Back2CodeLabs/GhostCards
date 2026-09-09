@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { ChevronRight, ListChecks, CheckCircle2, XCircle, Loader2, Sparkles, RotateCcw, RefreshCw } from "lucide-react";
+import { ChevronRight, ListChecks, CheckCircle2, XCircle, Loader2, Sparkles, RotateCcw, RefreshCw, FileText } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 import { API_BASE, useApi } from "../api";
 import { Loading, ApiError, EmptyState, ScreenHeader } from "../components/Shared";
@@ -15,6 +15,17 @@ function traitementStatutInfo(C, statut) {
   if (statut === "succes") return { label: "Succès", color: C.spectral, Icon: CheckCircle2 };
   if (statut === "echec") return { label: "Échec", color: C.brick, Icon: XCircle };
   return { label: "En cours", color: C.inkFaint, Icon: Loader2 };
+}
+
+// Distingue visuellement les 3 familles de traitements (synchro Pronote,
+// génération IA, OCR) — indépendant du statut (succès/échec/en cours,
+// voir traitementStatutInfo) qui garde son propre code couleur sur la
+// bordure gauche de chaque ligne.
+function traitementTypeInfo(C, type) {
+  if (type === "pronote_sync") return { label: "Synchro Pronote", Icon: RefreshCw, color: C.spectral, soft: C.spectralSoft };
+  if (type === "ia_generation" || type === "ia_completion") return { label: "Génération IA", Icon: Sparkles, color: C.haunt, soft: C.hauntSoft };
+  if (type === "transcription_document" || type === "transcription_note") return { label: "OCR", Icon: FileText, color: C.brick, soft: C.brickSoft };
+  return { label: type, Icon: ListChecks, color: C.inkFaint, soft: C.paperDim };
 }
 
 function formatDateHeure(iso) {
@@ -47,8 +58,34 @@ function useNow(active, intervalMs = 1000) {
   return now;
 }
 
+// Groupes affichés dans l'écran "Traitements" — un traitement rejoint le
+// premier groupe dont `match` est vrai ; tout le reste tombe dans "Autres"
+// (créé à la volée dans `grouperTraitements`, pas la peine de le lister ici).
+const GROUPES_TRAITEMENTS = [
+  { key: "pronote_sync", label: "Synchro Pronote", Icon: RefreshCw, colorKey: "spectral", match: (t) => t.type === "pronote_sync" },
+  { key: "ia", label: "Génération IA", Icon: Sparkles, colorKey: "haunt", match: (t) => t.type === "ia_generation" || t.type === "ia_completion" },
+  { key: "ocr", label: "OCR", Icon: FileText, colorKey: "brick", match: (t) => t.type === "transcription_document" || t.type === "transcription_note" },
+];
+
+// Répartit la liste (déjà triée par date décroissante côté API) dans ces
+// groupes, chaque groupe gardant cet ordre — permet d'afficher les
+// synchros Pronote, générations IA et OCR séparément plutôt qu'en une
+// seule liste chronologique où elles se mélangent.
+function grouperTraitements(C, data) {
+  const groupes = GROUPES_TRAITEMENTS.map((g) => ({ ...g, color: C[g.colorKey], items: [] }));
+  const autres = { key: "autres", label: "Autres", Icon: ListChecks, color: C.inkFaint, items: [] };
+  for (const t of data) {
+    (groupes.find((g) => g.match(t)) || autres).items.push(t);
+  }
+  return [...groupes, autres].filter((g) => g.items.length > 0);
+}
+
 function traitementTitre(t) {
   if (t.type === "pronote_sync") return "Synchronisation Pronote";
+  if (t.type === "ia_generation") return `Génération IA · Cours #${t.cible_id}`;
+  if (t.type === "ia_completion") return `Complément IA (+10) · Cours #${t.cible_id}`;
+  if (t.type === "transcription_document") return `OCR · Document #${t.cible_id}`;
+  if (t.type === "transcription_note") return `OCR · Note #${t.cible_id}`;
   return `${t.type} · ${t.cible_type} #${t.cible_id}`;
 }
 
@@ -97,33 +134,44 @@ export function TraitementsScreen({ onOpenTraitement }) {
         </button>
         {syncError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "8px 0 0" }}>{syncError}</p>}
       </div>
-      <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 22 }}>
         {traitements.loading && <Loading />}
         {traitements.error && <ApiError message={traitements.error} onRetry={traitements.reload} />}
         {traitements.data && traitements.data.length === 0 && (
           <EmptyState text="Aucun traitement pour l'instant." sub="Ils apparaîtront ici dès qu'un document ou une note sera transcrit." icon={ListChecks} />
         )}
-        {traitements.data?.map((t) => {
-          const { label, color, Icon } = traitementStatutInfo(C, t.statut);
-          return (
-            <button
-              key={t.id}
-              onClick={() => onOpenTraitement(t.id)}
-              style={{ display: "flex", alignItems: "center", gap: 10, background: C.white, border: `1px solid ${C.line}`, borderLeft: `3px solid ${color}`, borderRadius: 10, padding: "12px 14px", cursor: "pointer", textAlign: "left", fontFamily: uiFont }}
-            >
-              <Icon size={16} color={color} style={t.statut === "en_cours" ? { animation: "spin 1s linear infinite" } : {}} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13.5, color: C.ink, fontWeight: 600 }}>
-                  {traitementTitre(t)}
-                </div>
-                <div style={{ fontSize: 12, color: C.inkSoft, marginTop: 2 }}>
-                  {label} {t.moteur ? `· ${t.moteur}` : ""} · {new Date(t.created_at).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
-                </div>
-              </div>
-              <ChevronRight size={16} color={C.inkFaint} />
-            </button>
-          );
-        })}
+        {traitements.data && traitements.data.length > 0 && grouperTraitements(C, traitements.data).map((groupe) => (
+          <div key={groupe.key}>
+            <div className="flex items-center gap-2" style={{ marginBottom: 8 }}>
+              <groupe.Icon size={14} color={groupe.color} />
+              <span style={{ fontFamily: uiFont, fontSize: 12, fontWeight: 700, color: groupe.color, letterSpacing: 0.3, textTransform: "uppercase" }}>{groupe.label}</span>
+              <span style={{ fontFamily: uiFont, fontSize: 11.5, color: C.inkFaint }}>({groupe.items.length})</span>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {groupe.items.map((t) => {
+                const { label, color, Icon } = traitementStatutInfo(C, t.statut);
+                return (
+                  <button
+                    key={t.id}
+                    onClick={() => onOpenTraitement(t.id)}
+                    style={{ display: "flex", alignItems: "center", gap: 10, background: C.white, border: `1px solid ${C.line}`, borderLeft: `3px solid ${color}`, borderRadius: 10, padding: "12px 14px", cursor: "pointer", textAlign: "left", fontFamily: uiFont }}
+                  >
+                    <Icon size={16} color={color} style={t.statut === "en_cours" ? { animation: "spin 1s linear infinite" } : {}} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13.5, color: C.ink, fontWeight: 600 }}>
+                        {traitementTitre(t)}
+                      </div>
+                      <div style={{ fontSize: 12, color: C.inkSoft, marginTop: 2 }}>
+                        {label} {t.moteur ? `· ${t.moteur}` : ""} · {new Date(t.created_at).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                      </div>
+                    </div>
+                    <ChevronRight size={16} color={C.inkFaint} />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -167,6 +215,7 @@ export function TraitementDetail({ traitementId, onBack }) {
 
   const t = traitement.data;
   const { label, color, Icon } = traitementStatutInfo(C, t.statut);
+  const typeInfo = traitementTypeInfo(C, t.type);
   const dureeAffichee = enCours
     ? formatDuree(now - new Date(t.created_at).getTime())
     : formatDuree(t.duree_ms);
@@ -175,6 +224,9 @@ export function TraitementDetail({ traitementId, onBack }) {
     <div style={{ paddingBottom: 28 }}>
       <ScreenHeader title={traitementTitre(t)} onBack={onBack} />
       <div style={{ padding: "16px 20px 0" }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 5, background: typeInfo.soft, color: typeInfo.color, borderRadius: 999, padding: "3px 10px", fontFamily: uiFont, fontSize: 11.5, fontWeight: 700, marginBottom: 8 }}>
+          <typeInfo.Icon size={12} /> {typeInfo.label}
+        </span>
         <div className="flex items-center gap-2">
           <Icon size={16} color={color} />
           <span style={{ fontFamily: uiFont, fontSize: 13.5, fontWeight: 700, color }}>{label}</span>
