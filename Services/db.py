@@ -55,6 +55,11 @@ def init_db() -> None:
         # Détail des étapes internes d'un traitement (ex. pdftotext puis
         # bascule OCR page par page) — JSON, voir log_traitement ci-dessous.
         _ensure_column(conn, "traitements", "etapes", "TEXT")
+        # Accès à l'assistant conversationnel : désactivé par défaut pour
+        # un nouveau compte élève, activable au cas par cas par l'admin
+        # (écran "Élèves") — l'admin y a toujours accès, lui, sans ce flag
+        # (voir BackEnd/app/main.py::_peut_utiliser_assistant).
+        _ensure_column(conn, "eleves", "assistant_actif", "INTEGER NOT NULL DEFAULT 0")
         conn.commit()
 
 
@@ -165,6 +170,19 @@ def log_traitement(type_: str, cible_type: str, cible_id: int):
                 erreur=None, duree_ms=int((time.monotonic() - debut) * 1000),
                 etapes=_json.dumps(ctx.etapes, ensure_ascii=False) if ctx.etapes else None,
             )
+
+
+def get_parametre(conn: sqlite3.Connection, cle: str, defaut: str | None = None) -> str | None:
+    row = conn.execute("SELECT valeur FROM parametres WHERE cle = ?", (cle,)).fetchone()
+    return row["valeur"] if row is not None else defaut
+
+
+def set_parametre(conn: sqlite3.Connection, cle: str, valeur: str) -> None:
+    conn.execute(
+        "INSERT INTO parametres (cle, valeur) VALUES (?, ?) "
+        "ON CONFLICT(cle) DO UPDATE SET valeur = excluded.valeur",
+        (cle, valeur),
+    )
 
 
 def upsert_matiere(conn: sqlite3.Connection, nom: str) -> int:

@@ -98,15 +98,31 @@ des comptes élèves (Google) — un élève ne peut jamais devenir admin :
 définis `ADMIN_PASSWORD` dans `.env`, puis connecte-toi via le petit
 bouton bouclier dans l'en-tête du site.
 
-## Génération IA (résumés / flashcards / quiz)
+## Génération IA (résumés / flashcards / quiz) et assistant
 
-`Services/ia_generation.py` génère résumé, flashcards et quiz d'un cours
-via un modèle Ollama local (`OLLAMA_URL`, `OLLAMA_MODEL` dans `.env` —
-gros volume de génération potentiel, gratuit et privé, contrairement à
-l'assistant conversationnel qui reste sur l'API Anthropic). Déclenché
-depuis le bouton "Générer" sur la page d'un cours — aucune commande
-manuelle nécessaire. Compter jusqu'à ~30 minutes pour un cours complet
-avec `qwen3:14b` en CPU : normal, pas un bug.
+`Services/ia_generation.py` génère résumé, flashcards et quiz d'un cours,
+et fait aussi tourner l'assistant conversationnel — **les deux passent
+par le même moteur**. Trois moteurs possibles : Ollama local (par
+défaut, gratuit — `OLLAMA_URL`/`OLLAMA_MODEL` dans `.env`), Claude
+(Anthropic) ou Gemini (Google). Le choix et les clés se changent **à
+chaud depuis l'écran admin "Paramétrage"**, sans redémarrer le service —
+`.env` (`IA_ENGINE`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`) ne sert que
+de valeur de départ. Chaque moteur cloud (Claude, Gemini) a sa propre
+clé, jamais réutilisée automatiquement pour l'autre.
+
+Pourquoi pas la connexion Google des élèves pour utiliser leur propre
+Gemini ? Vérifié : "Sign in with Google" ne donne aucun accès à l'API
+Gemini, il n'existe pas de mécanisme OAuth pour ça — chaque compte
+devrait créer sa propre clé manuellement sur aistudio.google.com, pas
+réaliste pour une classe.
+
+Génération déclenchée depuis le bouton "Générer" sur la page d'un cours
+— aucune commande manuelle nécessaire. Compter jusqu'à ~30 minutes pour
+un cours complet avec `qwen3:14b` en CPU : normal, pas un bug.
+
+**Accès à l'assistant** : désactivé par défaut pour un compte élève,
+à activer au cas par cas depuis l'écran admin "Élèves" (bouton bascule).
+L'admin y a toujours accès.
 
 ## Authentification élève (Google)
 

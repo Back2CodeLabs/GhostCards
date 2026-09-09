@@ -80,13 +80,25 @@ OCR_ENGINE = os.environ.get("OCR_ENGINE", "paddleocr")
 # scanné (évite qu'un gros PDF ne déclenche des dizaines d'appels).
 OCR_MAX_PAGES = int(os.environ.get("OCR_MAX_PAGES", 15))
 
-# --- Génération IA locale (Ollama) ------------------------------------------
-# Résumés/flashcards/quiz sont générés par un modèle local plutôt que l'API
-# Anthropic : c'est un gros volume de génération (potentiellement des
-# dizaines de cours), gratuit et privé en local, là où l'API Claude reste
-# utilisée uniquement pour l'assistant conversationnel (faible volume).
+# --- Génération IA (résumés/flashcards/quiz) --------------------------------
+# Moteur par défaut = Ollama en local : gros volume de génération
+# potentiel (des dizaines de cours), gratuit et privé, là où l'API
+# Anthropic reste réservée à l'assistant conversationnel (faible volume).
+# Gemini est proposé en option (nécessite une clé API Google, le contenu
+# des cours part alors chez Google) pour qui préfère la rapidité/qualité
+# cloud à la gratuité locale.
+#
+# IMPORTANT : le moteur réellement utilisé et la clé Gemini sont
+# modifiables à chaud depuis l'écran admin "Paramétrage" (stockés dans la
+# table `parametres`, voir Services/db.py::get_parametre/set_parametre) —
+# les variables ci-dessous ne sont que la valeur de départ, avant toute
+# configuration via l'interface (utile pour un premier déploiement où
+# .env est plus rapide à éditer qu'à cliquer dans l'admin).
+IA_ENGINE = os.environ.get("IA_ENGINE", "ollama")  # 'ollama' | 'gemini'
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:14b")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
 FLASHCARDS_PAR_COURS = int(os.environ.get("FLASHCARDS_PAR_COURS", 10))
 QUESTIONS_QUIZ_PAR_COURS = int(os.environ.get("QUESTIONS_QUIZ_PAR_COURS", 5))
 # Longueur max de texte envoyée au modèle (caractères) — au-delà, tronqué.

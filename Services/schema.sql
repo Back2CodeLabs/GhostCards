@@ -95,6 +95,16 @@ CREATE TABLE IF NOT EXISTS traitements (
 );
 CREATE INDEX IF NOT EXISTS idx_traitements_cible ON traitements(cible_type, cible_id);
 
+-- Réglages modifiables à chaud depuis l'écran admin "Paramétrage" (ex.
+-- choix du moteur de génération IA, clé Gemini) : évite d'avoir à éditer
+-- .env et redémarrer le service pour un simple changement de moteur.
+-- Absent d'une clé = pas encore configuré, on retombe sur la valeur par
+-- défaut de Services/config.py (qui lit .env).
+CREATE TABLE IF NOT EXISTS parametres (
+    cle     TEXT PRIMARY KEY,
+    valeur  TEXT
+);
+
 CREATE TABLE IF NOT EXISTS sync_log (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     started_at          TEXT NOT NULL,

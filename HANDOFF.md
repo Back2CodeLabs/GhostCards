@@ -380,6 +380,63 @@ présence de `ia_resume` plutôt que sur `ia_statut`, avec un message
 d'erreur discret sous les boutons si la dernière tentative a échoué —
 le contenu précédent reste toujours visible.
 
+## État — fonctionnel et testé (suite du 9 septembre 2026 : multi-moteur IA + accès assistant)
+
+**Pourquoi** : question posée — "puisque les élèves se connectent avec
+leur compte Google, peut-on utiliser leur Gemini ?". Réponse vérifiée par
+recherche web : non, "Sign in with Google" (scopes `openid email
+profile`) ne donne aucun accès Gemini — Google l'a confirmé explicitement
+pour ses propres outils IA en 2026. Le seul moyen est une clé API perso
+créée manuellement sur aistudio.google.com, sans lien avec la connexion —
+irréaliste à demander à des collégiens/lycéens. Décision : Gemini reste
+possible mais avec **une seule clé, celle de Cédric**, comme pour
+Anthropic.
+
+**Trois moteurs IA au choix, Ollama par défaut** (`Services/ia_generation.py`) :
+Ollama (local, gratuit), Claude (Anthropic), Gemini (Google). Le choix
+et les clés sont **modifiables à chaud depuis l'écran admin
+"Paramétrage"** (nouvelle table `parametres`, clé/valeur — voir
+`Services/db.py::get_parametre`/`set_parametre`) plutôt que dans `.env` —
+pas besoin de redémarrer le service pour changer de moteur ou tourner
+une clé. `.env` (`IA_ENGINE`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`,
+`GEMINI_MODEL`) ne sert que de valeur de départ avant toute config via
+l'interface. Les clés ne sont **jamais renvoyées en clair** par
+`GET /api/parametres` (juste `..._configuree: bool`), vérifié par test.
+Claude et Gemini ont chacun leur propre clé (pas de réutilisation
+implicite) — Claude a sa propre entrée dans le formulaire au même titre
+que Gemini.
+
+**L'assistant conversationnel utilise désormais le même moteur configuré**
+que la génération (`ia_generation.repondre_conversation`, dispatch par
+moteur comme `_appeler_ia`) — avant cette session il était câblé en dur
+sur Claude. Adaptations par moteur : Ollama via `/api/chat` (multi-tour,
+pas `/api/generate`), Gemini avec le rôle `"model"` pour le tour de l'IA
+(pas `"assistant"`), Claude inchangé. Timeout court (60-120s, contre
+1800s pour la génération en arrière-plan) — l'élève attend devant son
+écran, pas question de le faire patienter 30 min. `main.py::_get_anthropic`
+et l'import direct `anthropic` dans `main.py` ont été supprimés (code mort
+une fois l'appel déplacé dans `ia_generation.py`).
+
+**Accès à l'assistant restreint** (demandé le 9 septembre 2026) :
+désactivé par défaut pour un compte élève (`eleves.assistant_actif`,
+défaut 0), activable au cas par cas depuis l'écran admin "Élèves"
+(bouton bascule ON/OFF, `PUT /api/eleves/{id}/assistant`). L'admin y a
+toujours accès, indépendamment de ce flag. Frontend (`AssistantScreen`) :
+écran de verrouillage si non autorisé, avec bouton de connexion Google si
+pas encore connecté, ou message "demande à ton professeur" si connecté
+mais pas activé.
+
+**Non vérifié en conditions réelles** : les trois moteurs sont testés
+avec des mocks (urlopen/Anthropic simulés) — jamais appelés avec de
+vraies clés Gemini/Claude. Le endpoint Gemini exact
+(`generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`,
+header `x-goog-api-key`, `generationConfig.responseMimeType`) et le nom
+de modèle par défaut (`gemini-3.5-flash-lite`) viennent d'une recherche
+web ciblée (septembre 2026) mais pas d'un appel réel — à confirmer avec
+une vraie clé avant de considérer Gemini fiable en prod. Le modèle est
+éditable dans l'écran Paramétrage si le nom par défaut est erroné ou
+déprécié.
+
 ## État — pas commencé
 
 - **Exposition hors LAN** (nom de domaine + HTTPS + reverse proxy) —

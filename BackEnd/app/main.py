@@ -19,7 +19,6 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from apscheduler.schedulers.background import BackgroundScheduler
 from pydantic import BaseModel
-import anthropic
 
 # Services/ vit à côté de BackEnd/ (voir GhostCards/README.md pour le
 # schéma d'ensemble) : ce n'est pas un sous-package de `app`, donc on
@@ -34,12 +33,14 @@ from Services import db, ia_generation, ocr, pronote_sync  # noqa: E402
 from Services.auth import oauth  # noqa: E402
 from Services.config import (  # noqa: E402
     DOCUMENTS_DIR,
-    ANTHROPIC_API_KEY,
     BASE_URL,
     SESSION_SECRET_KEY,
     GOOGLE_HOSTED_DOMAIN,
     AUTHORIZED_EMAILS,
     ADMIN_PASSWORD,
+    IA_ENGINE,
+    GEMINI_MODEL,
+    ANTHROPIC_API_KEY,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -99,7 +100,7 @@ def _current_eleve(request: Request):
         return None
     with db.session() as conn:
         row = conn.execute(
-            "SELECT id, nom, email, avatar_url FROM eleves WHERE id = ?", (eleve_id,)
+            "SELECT id, nom, email, avatar_url, assistant_actif FROM eleves WHERE id = ?", (eleve_id,)
         ).fetchone()
         return dict(row) if row else None
 
@@ -113,6 +114,18 @@ def _require_admin(request: Request) -> None:
     """
     if not request.session.get("is_admin"):
         raise HTTPException(403, "Réservé aux administrateurs.")
+
+
+def _peut_utiliser_assistant(request: Request) -> bool:
+    """
+    L'assistant est désactivé par défaut pour un compte élève (coût/volume
+    des appels IA) — activable au cas par cas depuis l'écran admin
+    "Élèves". L'admin y a toujours accès, sans dépendre de ce flag.
+    """
+    if request.session.get("is_admin"):
+        return True
+    eleve = _current_eleve(request)
+    return bool(eleve and eleve.get("assistant_actif"))
 
 
 def _email_autorise(email: str) -> bool:
@@ -419,11 +432,72 @@ def list_eleves(request: Request):
     with db.session() as conn:
         rows = conn.execute(
             """SELECT e.id, e.nom, e.email, e.avatar_url, e.created_at, e.derniere_connexion,
-                      COUNT(n.id) AS nb_notes
+                      e.assistant_actif, COUNT(n.id) AS nb_notes
                FROM eleves e LEFT JOIN notes_eleves n ON n.eleve_id = e.id
                GROUP BY e.id ORDER BY e.derniere_connexion DESC"""
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+class AssistantActifPayload(BaseModel):
+    actif: bool
+
+
+@app.put("/api/eleves/{eleve_id}/assistant")
+def set_assistant_actif(eleve_id: int, payload: AssistantActifPayload, request: Request):
+    """Active/désactive l'assistant pour un élève précis — voir _peut_utiliser_assistant."""
+    _require_admin(request)
+    with db.session() as conn:
+        if conn.execute("SELECT 1 FROM eleves WHERE id = ?", (eleve_id,)).fetchone() is None:
+            raise HTTPException(404, "Élève introuvable")
+        conn.execute("UPDATE eleves SET assistant_actif = ? WHERE id = ?", (int(payload.actif), eleve_id))
+    return {"ok": True}
+
+
+@app.get("/api/parametres")
+def get_parametres(request: Request):
+    """
+    Réglages admin modifiables à chaud (moteur IA pour la génération ET
+    l'assistant conversationnel — voir Services/ia_generation.py). Les
+    clés (Anthropic, Gemini) ne sont jamais renvoyées en clair, seulement
+    si elles sont configurées ou non (comme un champ mot de passe côté
+    navigateur).
+    """
+    _require_admin(request)
+    with db.session() as conn:
+        moteur = db.get_parametre(conn, "ia_moteur", IA_ENGINE)
+        gemini_model = db.get_parametre(conn, "gemini_model", GEMINI_MODEL)
+        gemini_key = db.get_parametre(conn, "gemini_api_key", "")
+        anthropic_key = db.get_parametre(conn, "anthropic_api_key", ANTHROPIC_API_KEY)
+    return {
+        "ia_moteur": moteur if moteur in ("ollama", "gemini", "claude") else "ollama",
+        "gemini_model": gemini_model or GEMINI_MODEL,
+        "gemini_api_key_configuree": bool(gemini_key),
+        "anthropic_api_key_configuree": bool(anthropic_key),
+    }
+
+
+class ParametresIA(BaseModel):
+    ia_moteur: str
+    gemini_model: str | None = None
+    gemini_api_key: str | None = None  # None = ne pas changer ; chaîne vide = effacer
+    anthropic_api_key: str | None = None  # idem
+
+
+@app.put("/api/parametres")
+def set_parametres(payload: ParametresIA, request: Request):
+    _require_admin(request)
+    if payload.ia_moteur not in ("ollama", "gemini", "claude"):
+        raise HTTPException(400, "Moteur invalide (attendu 'ollama', 'gemini' ou 'claude').")
+    with db.session() as conn:
+        db.set_parametre(conn, "ia_moteur", payload.ia_moteur)
+        if payload.gemini_model:
+            db.set_parametre(conn, "gemini_model", payload.gemini_model)
+        if payload.gemini_api_key is not None:
+            db.set_parametre(conn, "gemini_api_key", payload.gemini_api_key)
+        if payload.anthropic_api_key is not None:
+            db.set_parametre(conn, "anthropic_api_key", payload.anthropic_api_key)
+    return {"ok": True}
 
 
 @app.get("/api/devoirs")
@@ -491,18 +565,6 @@ def apercu_note_fichier(note_id: int):
     return _reponse_fichier(note["chemin_fichier"], f"note_{note_id}{Path(note['chemin_fichier'] or '').suffix}", inline=True)
 
 
-_anthropic_client = None
-
-
-def _get_anthropic():
-    global _anthropic_client
-    if not ANTHROPIC_API_KEY:
-        raise HTTPException(500, "ANTHROPIC_API_KEY n'est pas configurée (voir .env).")
-    if _anthropic_client is None:
-        _anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    return _anthropic_client
-
-
 class AssistantMessage(BaseModel):
     role: str
     text: str
@@ -521,24 +583,33 @@ ASSISTANT_SYSTEM_PROMPT = (
 
 
 @app.post("/api/assistant")
-def assistant(payload: AssistantRequest):
+def assistant(payload: AssistantRequest, request: Request):
     """
-    Proxy vers l'API Anthropic : la clé reste côté serveur, jamais exposée
-    au navigateur. Le frontend envoie juste l'historique de la conversation.
-    """
-    client = _get_anthropic()
-    try:
-        response = client.messages.create(
-            model="claude-sonnet-5",  # remplacer par "claude-haiku-4-5-20251001" pour un usage moins coûteux
-            max_tokens=600,
-            system=ASSISTANT_SYSTEM_PROMPT,
-            messages=[{"role": m.role, "content": m.text} for m in payload.messages],
-        )
-    except anthropic.APIError as e:
-        raise HTTPException(502, f"Erreur de l'API Anthropic : {e}")
+    Proxy vers le moteur IA configuré (Ollama par défaut, Claude ou Gemini
+    en option — voir l'écran admin "Paramétrage" et
+    Services/ia_generation.py::config_ia) : la clé, s'il y en a une, reste
+    côté serveur, jamais exposée au navigateur. Le frontend envoie juste
+    l'historique de la conversation.
 
-    text = "".join(block.text for block in response.content if block.type == "text")
-    return {"text": text or "Je n'ai pas pu formuler de réponse, réessaie."}
+    Réservé à l'admin et aux élèves activés au cas par cas (voir
+    _peut_utiliser_assistant) — contrairement au reste du site, ouvert à
+    tous sans connexion.
+    """
+    if not _peut_utiliser_assistant(request):
+        raise HTTPException(
+            403, "L'assistant n'est pas activé pour ton compte — demande à ton professeur."
+        )
+    with db.session() as conn:
+        cfg = ia_generation.config_ia(conn)
+    try:
+        texte = ia_generation.repondre_conversation(
+            [{"role": m.role, "text": m.text} for m in payload.messages],
+            ASSISTANT_SYSTEM_PROMPT, cfg,
+        )
+    except ia_generation.GenerationError as e:
+        raise HTTPException(502, str(e))
+
+    return {"text": texte.strip() or "Je n'ai pas pu formuler de réponse, réessaie."}
 
 
 @app.post("/api/sync")
