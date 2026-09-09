@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { ChevronRight, ListChecks, CheckCircle2, XCircle, Loader2, Sparkles, RotateCcw, RefreshCw, FileText } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 import { API_BASE, useApi } from "../api";
-import { Loading, ApiError, EmptyState, ScreenHeader } from "../components/Shared";
+import { Loading, ApiError, EmptyState, ScreenHeader, SousMenu } from "../components/Shared";
 import { ResultatFormatte } from "../components/ResultatFormatte";
 
 /* ------------------------------------------------------------------ */
@@ -58,26 +58,14 @@ function useNow(active, intervalMs = 1000) {
   return now;
 }
 
-// Groupes affichés dans l'écran "Traitements" — un traitement rejoint le
-// premier groupe dont `match` est vrai ; tout le reste tombe dans "Autres"
-// (créé à la volée dans `grouperTraitements`, pas la peine de le lister ici).
-const GROUPES_TRAITEMENTS = [
-  { key: "pronote_sync", label: "Synchro Pronote", Icon: RefreshCw, colorKey: "spectral", match: (t) => t.type === "pronote_sync" },
-  { key: "ia", label: "Génération IA", Icon: Sparkles, colorKey: "haunt", match: (t) => t.type === "ia_generation" || t.type === "ia_completion" },
-  { key: "ocr", label: "OCR", Icon: FileText, colorKey: "brick", match: (t) => t.type === "transcription_document" || t.type === "transcription_note" },
-];
-
-// Répartit la liste (déjà triée par date décroissante côté API) dans ces
-// groupes, chaque groupe gardant cet ordre — permet d'afficher les
-// synchros Pronote, générations IA et OCR séparément plutôt qu'en une
-// seule liste chronologique où elles se mélangent.
-function grouperTraitements(C, data) {
-  const groupes = GROUPES_TRAITEMENTS.map((g) => ({ ...g, color: C[g.colorKey], items: [] }));
-  const autres = { key: "autres", label: "Autres", Icon: ListChecks, color: C.inkFaint, items: [] };
-  for (const t of data) {
-    (groupes.find((g) => g.match(t)) || autres).items.push(t);
-  }
-  return [...groupes, autres].filter((g) => g.items.length > 0);
+// Catégorie d'un traitement — sert à répartir la liste entre les 3
+// sous-menus de l'écran (Pronote / Génération IA / OCR), mêmes clés que
+// FrontEnd/src/components/Shared.jsx::SOUS_MENUS.
+function categorieTraitement(t) {
+  if (t.type === "pronote_sync") return "pronote";
+  if (t.type === "ia_generation" || t.type === "ia_completion") return "ia";
+  if (t.type === "transcription_document" || t.type === "transcription_note") return "ocr";
+  return null;
 }
 
 function traitementTitre(t) {
@@ -89,9 +77,16 @@ function traitementTitre(t) {
   return `${t.type} · ${t.cible_type} #${t.cible_id}`;
 }
 
+const MESSAGES_VIDES = {
+  pronote: "Aucune synchronisation Pronote pour l'instant.",
+  ia: "Aucune génération IA pour l'instant.",
+  ocr: "Aucune extraction OCR pour l'instant.",
+};
+
 export function TraitementsScreen({ onOpenTraitement }) {
   const { C } = useTheme();
   const traitements = useApi("/api/traitements");
+  const [sousMenu, setSousMenu] = useState("pronote");
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState(null);
 
@@ -115,63 +110,59 @@ export function TraitementsScreen({ onOpenTraitement }) {
     }
   }
 
+  const items = traitements.data?.filter((t) => categorieTraitement(t) === sousMenu) || [];
+
   return (
     <div>
       <div style={{ padding: "20px 20px 4px" }}>
         <h1 style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 24, color: C.ink, margin: 0 }}>Traitements</h1>
-        <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: "4px 0 0" }}>
+        <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: "4px 0 0 0" }}>
           Actions lancées en arrière-plan : synchronisations Pronote, extractions de texte et OCR.
         </p>
       </div>
-      <div style={{ padding: "16px 20px 0" }}>
-        <button
-          onClick={lancerSync}
-          disabled={syncing}
-          style={{ display: "flex", alignItems: "center", gap: 8, background: C.haunt, color: C.onAccent, border: "none", borderRadius: 10, padding: "9px 16px", fontFamily: uiFont, fontSize: 12.5, fontWeight: 700, cursor: syncing ? "default" : "pointer", opacity: syncing ? 0.7 : 1 }}
-        >
-          <RefreshCw size={13} style={syncing ? { animation: "spin 1s linear infinite" } : {}} />
-          {syncing ? "Lancement…" : "Lancer une synchronisation Pronote"}
-        </button>
-        {syncError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "8px 0 0" }}>{syncError}</p>}
+      <div style={{ padding: "16px 0 0" }}>
+        <SousMenu actif={sousMenu} onChange={setSousMenu} />
       </div>
-      <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 22 }}>
+      {sousMenu === "pronote" && (
+        <div style={{ padding: "0 20px 16px" }}>
+          <button
+            onClick={lancerSync}
+            disabled={syncing}
+            style={{ display: "flex", alignItems: "center", gap: 8, background: C.haunt, color: C.onAccent, border: "none", borderRadius: 10, padding: "9px 16px", fontFamily: uiFont, fontSize: 12.5, fontWeight: 700, cursor: syncing ? "default" : "pointer", opacity: syncing ? 0.7 : 1 }}
+          >
+            <RefreshCw size={13} style={syncing ? { animation: "spin 1s linear infinite" } : {}} />
+            {syncing ? "Lancement…" : "Lancer une synchronisation Pronote"}
+          </button>
+          {syncError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "8px 0 0" }}>{syncError}</p>}
+        </div>
+      )}
+      <div style={{ padding: "0 20px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
         {traitements.loading && <Loading />}
         {traitements.error && <ApiError message={traitements.error} onRetry={traitements.reload} />}
-        {traitements.data && traitements.data.length === 0 && (
-          <EmptyState text="Aucun traitement pour l'instant." sub="Ils apparaîtront ici dès qu'un document ou une note sera transcrit." icon={ListChecks} />
+        {traitements.data && items.length === 0 && (
+          <EmptyState text={MESSAGES_VIDES[sousMenu]} icon={ListChecks} />
         )}
-        {traitements.data && traitements.data.length > 0 && grouperTraitements(C, traitements.data).map((groupe) => (
-          <div key={groupe.key}>
-            <div className="flex items-center gap-2" style={{ marginBottom: 8 }}>
-              <groupe.Icon size={14} color={groupe.color} />
-              <span style={{ fontFamily: uiFont, fontSize: 12, fontWeight: 700, color: groupe.color, letterSpacing: 0.3, textTransform: "uppercase" }}>{groupe.label}</span>
-              <span style={{ fontFamily: uiFont, fontSize: 11.5, color: C.inkFaint }}>({groupe.items.length})</span>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {groupe.items.map((t) => {
-                const { label, color, Icon } = traitementStatutInfo(C, t.statut);
-                return (
-                  <button
-                    key={t.id}
-                    onClick={() => onOpenTraitement(t.id)}
-                    style={{ display: "flex", alignItems: "center", gap: 10, background: C.white, border: `1px solid ${C.line}`, borderLeft: `3px solid ${color}`, borderRadius: 10, padding: "12px 14px", cursor: "pointer", textAlign: "left", fontFamily: uiFont }}
-                  >
-                    <Icon size={16} color={color} style={t.statut === "en_cours" ? { animation: "spin 1s linear infinite" } : {}} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13.5, color: C.ink, fontWeight: 600 }}>
-                        {traitementTitre(t)}
-                      </div>
-                      <div style={{ fontSize: 12, color: C.inkSoft, marginTop: 2 }}>
-                        {label} {t.moteur ? `· ${t.moteur}` : ""} · {new Date(t.created_at).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
-                      </div>
-                    </div>
-                    <ChevronRight size={16} color={C.inkFaint} />
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ))}
+        {items.map((t) => {
+          const { label, color, Icon } = traitementStatutInfo(C, t.statut);
+          return (
+            <button
+              key={t.id}
+              onClick={() => onOpenTraitement(t.id)}
+              style={{ display: "flex", alignItems: "center", gap: 10, background: C.white, border: `1px solid ${C.line}`, borderLeft: `3px solid ${color}`, borderRadius: 10, padding: "12px 14px", cursor: "pointer", textAlign: "left", fontFamily: uiFont }}
+            >
+              <Icon size={16} color={color} style={t.statut === "en_cours" ? { animation: "spin 1s linear infinite" } : {}} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13.5, color: C.ink, fontWeight: 600 }}>
+                  {traitementTitre(t)}
+                </div>
+                <div style={{ fontSize: 12, color: C.inkSoft, marginTop: 2 }}>
+                  {label} {t.moteur ? `· ${t.moteur}` : ""} · {new Date(t.created_at).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                </div>
+              </div>
+              <ChevronRight size={16} color={C.inkFaint} />
+            </button>
+          );
+        })}
       </div>
     </div>
   );

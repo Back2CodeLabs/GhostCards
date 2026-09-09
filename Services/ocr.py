@@ -2,10 +2,13 @@
 Extraction de texte : PDF Pronote (avec ou sans couche de texte) et photos
 de notes manuscrites déposées par les élèves.
 
-Moteur par défaut : PaddleOCR, local et gratuit (voir OCR_ENGINE dans
-config.py et HANDOFF.md pour l'historique de la décision — nécessite un
-venv Python <=3.13). Vision Claude reste disponible en repli
-(OCR_ENGINE=claude) si PaddleOCR déçoit sur de l'écriture manuscrite réelle.
+Moteur par défaut : PaddleOCR, local et gratuit (voir HANDOFF.md pour
+l'historique de la décision — nécessite un venv Python <=3.13). Vision
+Claude reste disponible en repli si PaddleOCR déçoit sur de l'écriture
+manuscrite réelle. Le choix (et la clé Anthropic, partagée avec la
+génération IA/l'assistant) se change à chaud depuis l'écran admin
+"Paramétrage" — voir `config_ocr` ci-dessous ; `OCR_ENGINE` dans .env ne
+sert que de valeur de départ.
 
 Chaque appel à `transcribe_document`/`transcribe_note` journalise son
 déroulement dans la table `traitements` (durée, succès/échec, résultat) :
@@ -31,6 +34,24 @@ _log_traitement = db.log_traitement  # partagé avec Services/ia_generation.py e
 
 class OcrError(Exception):
     pass
+
+
+def config_ocr(conn) -> dict:
+    """
+    Résout la configuration OCR effective : valeurs enregistrées via
+    l'écran admin "Paramétrage" (table `parametres`) si elles existent,
+    sinon les valeurs de départ définies dans .env (Services/config.py).
+    La clé Anthropic est PARTAGÉE avec la génération IA/l'assistant (même
+    compte, voir Services/ia_generation.py::config_ia) — pas de champ
+    séparé à maintenir pour l'OCR.
+    """
+    moteur = db.get_parametre(conn, "ocr_engine", OCR_ENGINE)
+    if moteur not in ("paddleocr", "claude"):
+        moteur = "paddleocr"
+    return {
+        "moteur": moteur,
+        "anthropic_api_key": db.get_parametre(conn, "anthropic_api_key", ANTHROPIC_API_KEY),
+    }
 
 
 # --- Extraction PDF (texte natif) -------------------------------------------
@@ -88,22 +109,29 @@ OCR_PROMPT = (
 )
 
 _anthropic_client = None
+_anthropic_client_key = None
 
 
-def _anthropic():
-    global _anthropic_client
-    if not ANTHROPIC_API_KEY:
-        raise OcrError("ANTHROPIC_API_KEY n'est pas configurée (voir .env).")
-    if _anthropic_client is None:
+def _anthropic(api_key: str):
+    """
+    Client Anthropic mis en cache, mais recréé si la clé change (l'admin
+    peut la modifier à chaud depuis l'écran "Paramétrage" — voir
+    Services/ia_generation.py::_client_claude, même logique).
+    """
+    global _anthropic_client, _anthropic_client_key
+    if not api_key:
+        raise OcrError("Clé Anthropic non configurée (écran admin Paramétrage, ou ANTHROPIC_API_KEY dans .env).")
+    if _anthropic_client is None or _anthropic_client_key != api_key:
         import anthropic
-        _anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        _anthropic_client = anthropic.Anthropic(api_key=api_key)
+        _anthropic_client_key = api_key
     return _anthropic_client
 
 
-def ocr_image_claude(image_path: Path) -> str:
+def ocr_image_claude(image_path: Path, api_key: str) -> str:
     media_type = _MEDIA_TYPES.get(image_path.suffix.lower(), "image/png")
     data = base64.standard_b64encode(image_path.read_bytes()).decode("ascii")
-    response = _anthropic().messages.create(
+    response = _anthropic(api_key).messages.create(
         model="claude-sonnet-5",
         max_tokens=2000,
         messages=[{
@@ -163,11 +191,10 @@ def ocr_image_paddleocr(image_path: Path) -> str:
     return "\n".join(lignes)
 
 
-def _ocr_engine_fn():
-    try:
-        return {"claude": ocr_image_claude, "paddleocr": ocr_image_paddleocr}[OCR_ENGINE]
-    except KeyError:
-        raise OcrError(f"OCR_ENGINE inconnu : {OCR_ENGINE!r} (attendu 'claude' ou 'paddleocr').")
+def _ocr_engine_fn(cfg: dict):
+    if cfg["moteur"] == "claude":
+        return lambda image_path: ocr_image_claude(image_path, cfg["anthropic_api_key"])
+    return ocr_image_paddleocr
 
 
 # --- Orchestrateurs ------------------------------------------------------------
@@ -181,6 +208,7 @@ def transcribe_document(document_id: int) -> None:
     """Extrait le texte d'un document Pronote (PDF natif, PDF scanné, ou image)."""
     with db.session() as conn:
         doc = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
+        cfg = config_ocr(conn)
     if doc is None or not doc["chemin_local"] or doc["chemin_local"].startswith("lien:"):
         return  # lien externe, pas de fichier local à transcrire
 
@@ -190,13 +218,13 @@ def transcribe_document(document_id: int) -> None:
 
     suffix = path.suffix.lower()
     if suffix == ".pdf":
-        _transcrire_pdf_document(document_id, path)
+        _transcrire_pdf_document(document_id, path, cfg)
     elif suffix in _MEDIA_TYPES:
-        _transcrire_image_document(document_id, path)
+        _transcrire_image_document(document_id, path, cfg)
     # autres types (ex. .docx) : pas pris en charge pour l'instant
 
 
-def _transcrire_pdf_document(document_id: int, path: Path) -> None:
+def _transcrire_pdf_document(document_id: int, path: Path, cfg: dict) -> None:
     with _log_traitement("transcription_document", "document", document_id) as ctx:
         t0 = time.monotonic()
         texte = extract_pdf_text(path)
@@ -213,37 +241,37 @@ def _transcrire_pdf_document(document_id: int, path: Path) -> None:
         else:
             ctx.etape(
                 "détection", statut="info",
-                detail=f"texte jugé trop pauvre (seuil 40 caractères/page) — bascule sur l'OCR ({OCR_ENGINE})",
+                detail=f"texte jugé trop pauvre (seuil 40 caractères/page) — bascule sur l'OCR ({cfg['moteur']})",
             )
             with tempfile.TemporaryDirectory() as tmp:
                 images = pdf_to_images(path, Path(tmp))
                 morceaux = []
                 for i, img in enumerate(images, start=1):
                     t1 = time.monotonic()
-                    texte_page = _ocr_engine_fn()(img)
+                    texte_page = _ocr_engine_fn(cfg)(img)
                     morceaux.append(texte_page)
                     ctx.etape(
-                        f"ocr page {i}/{len(images)}", moteur=OCR_ENGINE,
+                        f"ocr page {i}/{len(images)}", moteur=cfg["moteur"],
                         detail=f"{len(texte_page.strip())} caractère(s) extrait(s)",
                         duree_ms=int((time.monotonic() - t1) * 1000),
                     )
             texte = "\n\n".join(m for m in morceaux if m)
-            ctx.moteur = OCR_ENGINE
+            ctx.moteur = cfg["moteur"]
             ctx.resultat = texte
 
     _enregistrer_texte_document(document_id, texte)
 
 
-def _transcrire_image_document(document_id: int, path: Path) -> None:
+def _transcrire_image_document(document_id: int, path: Path, cfg: dict) -> None:
     with _log_traitement("transcription_document", "document", document_id) as ctx:
         t0 = time.monotonic()
-        texte = _ocr_engine_fn()(path)
+        texte = _ocr_engine_fn(cfg)(path)
         ctx.etape(
-            "ocr", moteur=OCR_ENGINE,
+            "ocr", moteur=cfg["moteur"],
             detail=f"{len(texte.strip())} caractère(s) extrait(s)",
             duree_ms=int((time.monotonic() - t0) * 1000),
         )
-        ctx.moteur = OCR_ENGINE
+        ctx.moteur = cfg["moteur"]
         ctx.resultat = texte
     _enregistrer_texte_document(document_id, texte)
 
@@ -258,6 +286,7 @@ def transcribe_note(note_id: int) -> None:
     """Transcrit la photo/PDF déposé pour une note élève, met à jour son contenu et son statut."""
     with db.session() as conn:
         note = conn.execute("SELECT * FROM notes_eleves WHERE id = ?", (note_id,)).fetchone()
+        cfg = config_ocr(conn)
     if note is None or not note["chemin_fichier"]:
         return
 
@@ -268,26 +297,26 @@ def transcribe_note(note_id: int) -> None:
 
     try:
         with _log_traitement("transcription_note", "note", note_id) as ctx:
-            ctx.moteur = OCR_ENGINE
+            ctx.moteur = cfg["moteur"]
             if path.suffix.lower() == ".pdf":
                 with tempfile.TemporaryDirectory() as tmp:
                     images = pdf_to_images(path, Path(tmp))
                     morceaux = []
                     for i, img in enumerate(images, start=1):
                         t0 = time.monotonic()
-                        texte_page = _ocr_engine_fn()(img)
+                        texte_page = _ocr_engine_fn(cfg)(img)
                         morceaux.append(texte_page)
                         ctx.etape(
-                            f"ocr page {i}/{len(images)}", moteur=OCR_ENGINE,
+                            f"ocr page {i}/{len(images)}", moteur=cfg["moteur"],
                             detail=f"{len(texte_page.strip())} caractère(s) extrait(s)",
                             duree_ms=int((time.monotonic() - t0) * 1000),
                         )
                 texte = "\n\n".join(m for m in morceaux if m)
             else:
                 t0 = time.monotonic()
-                texte = _ocr_engine_fn()(path)
+                texte = _ocr_engine_fn(cfg)(path)
                 ctx.etape(
-                    "ocr", moteur=OCR_ENGINE,
+                    "ocr", moteur=cfg["moteur"],
                     detail=f"{len(texte.strip())} caractère(s) extrait(s)",
                     duree_ms=int((time.monotonic() - t0) * 1000),
                 )

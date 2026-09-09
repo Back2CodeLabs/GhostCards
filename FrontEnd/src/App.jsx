@@ -102,8 +102,8 @@ export default function App() {
         <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", minHeight: "100vh" }}>
           <div className="flex items-center justify-between" style={{ padding: "14px 20px", borderBottom: `1px solid ${C.line}`, background: C.paper }}>
             <div className="flex items-center gap-2">
-              <Ghost className="gc-brand-icon" size={16} color={C.haunt} style={glowText(C, C.haunt)} />
-              <span className="gc-brand-text" style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 14, color: C.haunt, ...glowText(C, C.haunt, 0.7) }}>
+              <Ghost className="gc-brand-icon" size={16} color={C.haunt} style={glowText(C, C.haunt, 0.5)} />
+              <span className="gc-brand-text" style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 14, color: C.haunt, ...glowText(C, C.haunt, 0.35) }}>
                 Ghost Cards
               </span>
             </div>

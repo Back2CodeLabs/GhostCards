@@ -1,4 +1,4 @@
-import { ArrowLeft, Ghost, RefreshCw, WifiOff } from "lucide-react";
+import { ArrowLeft, Ghost, RefreshCw, WifiOff, Sparkles, FileText } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 
 /* ------------------------------------------------------------------ */
@@ -73,4 +73,44 @@ export function SectionLabel({ children }) {
 export function Divider() {
   const { C } = useTheme();
   return <div style={{ height: 1, background: C.line, margin: "16px 20px" }} />;
+}
+
+/* ------------------------------------------------------------------ */
+/* Sous-menu partagé par les écrans admin "Traitements" et               */
+/* "Paramétrage" — chacun y répartit son contenu en 3 catégories         */
+/* (Pronote, Génération IA, OCR), au lieu d'une seule liste/page mêlant   */
+/* tout. Mêmes clés dans les deux écrans pour rester cohérent.           */
+/* ------------------------------------------------------------------ */
+
+export const SOUS_MENUS = [
+  { key: "pronote", label: "Pronote", Icon: RefreshCw },
+  { key: "ia", label: "Génération IA", Icon: Sparkles },
+  { key: "ocr", label: "OCR", Icon: FileText },
+];
+
+export function SousMenu({ actif, onChange }) {
+  const { C } = useTheme();
+  return (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "0 20px 16px" }}>
+      {SOUS_MENUS.map((m) => {
+        const active = actif === m.key;
+        return (
+          <button
+            key={m.key}
+            onClick={() => onChange(m.key)}
+            style={{
+              display: "flex", alignItems: "center", gap: 6,
+              background: active ? C.hauntSoft : C.white,
+              border: `1px solid ${active ? C.haunt : C.line}`,
+              color: active ? C.haunt : C.inkSoft,
+              borderRadius: 999, padding: "7px 14px",
+              fontFamily: uiFont, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+            }}
+          >
+            <m.Icon size={13} /> {m.label}
+          </button>
+        );
+      })}
+    </div>
+  );
 }

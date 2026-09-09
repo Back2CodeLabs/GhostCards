@@ -91,16 +91,21 @@ sert surtout à tester ou déboguer.
 `Services/ocr.py` transcrit automatiquement en arrière-plan les PDF
 Pronote scannés (sans couche de texte) et les photos/PDF déposés par un
 élève sur un cours (`POST /api/cours/{id}/notes/photo`). Moteur par
-défaut : **PaddleOCR** (local et gratuit, `OCR_ENGINE=paddleocr` dans
-`.env`, voir `Services/config.py`) — nécessite un venv en **Python ≤3.13**
-(voir `HANDOFF.md`, section OCR, pour la procédure de changement de
-version sur l'OptiPlex, qui tournait jusque-là en Python 3.14). Vision
-Claude reste disponible en repli (`OCR_ENGINE=claude`) si PaddleOCR
-déçoit sur de l'écriture manuscrite réelle.
+défaut : **PaddleOCR** (local et gratuit) — nécessite un venv en
+**Python ≤3.13** (voir `HANDOFF.md`, section OCR, pour la procédure de
+changement de version sur l'OptiPlex, qui tournait jusque-là en Python
+3.14). Vision Claude reste disponible en repli si PaddleOCR déçoit sur
+de l'écriture manuscrite réelle — elle réutilise la clé Anthropic déjà
+configurée pour la génération IA/l'assistant (pas de clé séparée). Le
+choix se change à chaud depuis le sous-menu "OCR" de l'écran admin
+"Paramétrage" ; `OCR_ENGINE` dans `.env` (voir `Services/config.py`) ne
+sert que de valeur de départ.
 
 Chaque extraction/OCR est journalisée dans la table `traitements`, visible
 et relançable depuis l'écran "Traitements" du site (nav visible seulement
-en étant connecté en admin). L'accès admin est **totalement indépendant**
+en étant connecté en admin) — cet écran, comme "Paramétrage", est
+réparti en 3 sous-menus (Pronote / Génération IA / OCR) plutôt qu'une
+seule liste mélangeant tout. L'accès admin est **totalement indépendant**
 des comptes élèves (Google) — un élève ne peut jamais devenir admin :
 définis `ADMIN_PASSWORD` dans `.env`, puis connecte-toi via le petit
 bouton bouclier dans l'en-tête du site.

@@ -88,8 +88,8 @@ export function Nav({ tab, setTab, isAdmin }) {
     { id: "assistant", label: "Assistant", icon: MessageCircle },
   ];
   if (isAdmin) {
-    items.push({ id: "traitements", label: "Traitements", icon: ListChecks });
     items.push({ id: "eleves", label: "Élèves", icon: Users });
+    items.push({ id: "traitements", label: "Traitements", icon: ListChecks });
     items.push({ id: "parametres", label: "Paramétrage", icon: Settings });
   }
   return (

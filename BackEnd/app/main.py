@@ -478,6 +478,7 @@ def get_parametres(request: Request):
         gemini_key = db.get_parametre(conn, "gemini_api_key", "")
         anthropic_key = db.get_parametre(conn, "anthropic_api_key", ANTHROPIC_API_KEY)
         pronote_cfg = pronote_sync.config_pronote(conn)
+        ocr_cfg = ocr.config_ocr(conn)
     return {
         "ia_moteur": moteur if moteur in ("ollama", "gemini", "claude") else "ollama",
         "ollama_url": ollama_url or OLLAMA_URL,
@@ -489,6 +490,7 @@ def get_parametres(request: Request):
         "sync_days_back": pronote_cfg["sync_days_back"],
         "sync_days_forward": pronote_cfg["sync_days_forward"],
         "pronote_jeton_present": CREDENTIALS_PATH.exists(),
+        "ocr_engine": ocr_cfg["moteur"],
     }
 
 
@@ -520,6 +522,7 @@ class ParametresIA(BaseModel):
     pronote_url: str | None = None
     sync_days_back: int | None = None
     sync_days_forward: int | None = None
+    ocr_engine: str | None = None
 
 
 @app.put("/api/parametres")
@@ -531,6 +534,8 @@ def set_parametres(payload: ParametresIA, request: Request):
         raise HTTPException(400, "Le nombre de jours en arrière doit être positif.")
     if payload.sync_days_forward is not None and payload.sync_days_forward < 0:
         raise HTTPException(400, "Le nombre de jours en avant doit être positif.")
+    if payload.ocr_engine is not None and payload.ocr_engine not in ("paddleocr", "claude"):
+        raise HTTPException(400, "Moteur OCR invalide (attendu 'paddleocr' ou 'claude').")
     with db.session() as conn:
         db.set_parametre(conn, "ia_moteur", payload.ia_moteur)
         if payload.ollama_url:
@@ -549,6 +554,8 @@ def set_parametres(payload: ParametresIA, request: Request):
             db.set_parametre(conn, "sync_days_back", str(payload.sync_days_back))
         if payload.sync_days_forward is not None:
             db.set_parametre(conn, "sync_days_forward", str(payload.sync_days_forward))
+        if payload.ocr_engine:
+            db.set_parametre(conn, "ocr_engine", payload.ocr_engine)
     return {"ok": True}
 
 
