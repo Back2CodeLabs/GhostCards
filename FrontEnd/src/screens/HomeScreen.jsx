@@ -34,8 +34,7 @@ export function HomeScreen({ onOpenSubject, onOpenCours }) {
     <div style={{ paddingBottom: 24 }}>
       <div className="flex items-center justify-between" style={{ padding: "22px 20px 6px" }}>
         <div>
-          <p style={{ fontFamily: uiFont, color: C.inkFaint, fontSize: 13, margin: 0 }}>Ghost Cards</p>
-          <h1 style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 26, color: C.ink, margin: "2px 0 0" }}>Bonjour 👋</h1>
+          <h1 style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 26, color: C.ink, margin: 0 }}>Bonjour 👋</h1>
         </div>
         <button
           onClick={refresh}

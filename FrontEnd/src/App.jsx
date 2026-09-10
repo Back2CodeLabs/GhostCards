@@ -104,7 +104,7 @@ export default function App() {
             <div className="flex items-center gap-2">
               <Ghost className="gc-brand-icon" size={16} color={C.haunt} style={glowText(C, C.haunt, 0.5)} />
               <span className="gc-brand-text" style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 14, color: C.haunt, ...glowText(C, C.haunt, 0.35) }}>
-                Ghost Cards
+                Ghost School
               </span>
             </div>
             <div className="flex items-center gap-2">

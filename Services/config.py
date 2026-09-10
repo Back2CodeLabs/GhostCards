@@ -1,5 +1,5 @@
 """
-Configuration centrale de Ghost Cards.
+Configuration centrale de Ghost School.
 
 Toutes les valeurs peuvent être surchargées par des variables d'environnement
 (pratique pour un déploiement systemd sur l'OptiPlex sans toucher au code).

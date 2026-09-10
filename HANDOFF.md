@@ -1,4 +1,4 @@
-# Ghost Cards — Passation (état au 8 septembre 2026)
+# Ghost School — Passation (état au 8 septembre 2026)
 
 Ce document résume tout ce qu'il faut savoir pour reprendre le projet dans
 Claude Code sans repartir de zéro ni recasser ce qui fonctionne déjà. Les
@@ -8,7 +8,7 @@ bord" des décisions et de l'état d'avancement.
 
 ## Qui, quoi
 
-Cédric construit Ghost Cards pour la classe de 3ème B : synchro Pronote,
+Cédric construit Ghost School pour la classe de 3ème B : synchro Pronote,
 révision par flashcards/quiz générés par IA, notes collaboratives. Auto-hébergé
 sur son OptiPlex personnel (Linux).
 

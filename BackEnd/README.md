@@ -1,6 +1,6 @@
-# Ghost Cards — BackEnd
+# Ghost School — BackEnd
 
-API HTTP (FastAPI) de Ghost Cards : sert au frontend les données préparées
+API HTTP (FastAPI) de Ghost School : sert au frontend les données préparées
 par `Services/` (cours, documents, résumés, flashcards, quiz), et sert le
 frontend buildé en statique une fois `npm run build` lancé côté `FrontEnd/`.
 

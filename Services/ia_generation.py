@@ -1,5 +1,5 @@
 """
-Moteur IA de Ghost Cards : génération (résumé, flashcards, quiz) pour un
+Moteur IA de Ghost School : génération (résumé, flashcards, quiz) pour un
 cours, ET réponses de l'assistant conversationnel — les deux passent par
 le même moteur configuré (Ollama par défaut, Claude ou Gemini en option),
 résolu par `config_ia`. Changer de moteur dans l'écran admin

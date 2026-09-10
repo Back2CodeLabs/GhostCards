@@ -52,7 +52,7 @@ export function ApiError({ message, onRetry }) {
     <div style={{ padding: "40px 24px", textAlign: "center" }}>
       <WifiOff size={30} color={C.brick} strokeWidth={1.5} style={{ marginBottom: 10 }} />
       <p style={{ fontFamily: uiFont, color: C.brick, fontSize: 14, margin: "0 0 4px", fontWeight: 600 }}>
-        Impossible de joindre le serveur Ghost Cards
+        Impossible de joindre le serveur Ghost School
       </p>
       <p style={{ fontFamily: uiFont, color: C.inkSoft, fontSize: 12.5, margin: "0 0 16px" }}>{message}</p>
       <button

@@ -9,6 +9,28 @@ import { ExamMode } from "../components/ExamMode";
 // bascule qu'une fois le cours "évaporé", pas avant.
 const DUREE_EVAPORATION_MS = 600;
 
+// Dernier résultat d'examen : mémorisé par navigateur (localStorage), pas
+// par compte élève — prendre un examen ne nécessite pas de connexion, donc
+// pas de compte à qui l'associer côté serveur. "Pour un élève" ici veut
+// dire "pour qui a passé l'examen sur cet appareil".
+function sauvegarderResultatExamen(coursId, resultat) {
+  try {
+    localStorage.setItem(`gc_dernier_examen_${coursId}`, JSON.stringify({ ...resultat, date: new Date().toISOString() }));
+  } catch {
+    // localStorage indisponible (navigation privée, stockage bloqué...) :
+    // le résultat reste affiché pour la session en cours, juste pas gardé.
+  }
+}
+
+function lireResultatExamen(coursId) {
+  try {
+    const brut = localStorage.getItem(`gc_dernier_examen_${coursId}`);
+    return brut ? JSON.parse(brut) : null;
+  } catch {
+    return null;
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* Détail cours                                                         */
 /* ------------------------------------------------------------------ */
@@ -34,6 +56,7 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin, onOpenTraitem
   // "off" (cours visible normalement) → "evaporating" (animation en cours,
   // voir .gc-evaporate) → "active" (mode examen affiché, cours masqué).
   const [examPhase, setExamPhase] = useState("off");
+  const [dernierExamen, setDernierExamen] = useState(() => lireResultatExamen(coursId));
 
   function entrerModeExamen() {
     setExamPhase("evaporating");
@@ -41,6 +64,10 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin, onOpenTraitem
   }
   function quitterModeExamen() {
     setExamPhase("off");
+  }
+  function finirExamen(resultat) {
+    sauvegarderResultatExamen(coursId, resultat);
+    setDernierExamen(lireResultatExamen(coursId));
   }
 
   // Tant qu'une note déposée en photo/PDF est en cours de transcription
@@ -184,7 +211,7 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin, onOpenTraitem
       <ScreenHeader title={c.titre || "Cours"} onBack={onBack} />
       {examPhase === "active" ? (
         <div style={{ padding: "16px 20px 0" }}>
-          <ExamMode flashcards={c.ia_flashcards} quiz={c.ia_quiz} onExit={quitterModeExamen} />
+          <ExamMode flashcards={c.ia_flashcards} quiz={c.ia_quiz} onExit={quitterModeExamen} onFinish={finirExamen} />
         </div>
       ) : (
       <div style={{ padding: "16px 20px 0" }} className={examPhase === "evaporating" ? "gc-evaporate" : ""}>
@@ -353,6 +380,13 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin, onOpenTraitem
                 {" "}({c.ia_flashcards.length} flashcard{c.ia_flashcards.length > 1 ? "s" : ""}
                 {c.ia_quiz.length > 0 ? `, ${c.ia_quiz.length} quiz` : ""})
               </button>
+            )}
+            {dernierExamen && (
+              <p style={{ fontFamily: uiFont, fontSize: 12, color: C.inkFaint, textAlign: "center", margin: "8px 0 0" }}>
+                Dernier résultat : <strong style={{ color: C.ink }}>{dernierExamen.pourcentage}%</strong>
+                {" "}({dernierExamen.totalReussies}/{dernierExamen.totalReponses}) le{" "}
+                {new Date(dernierExamen.date).toLocaleDateString("fr-FR", { day: "numeric", month: "long" })}
+              </p>
             )}
 
             <div className="flex items-center gap-2" style={{ marginTop: 16 }}>

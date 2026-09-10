@@ -1,7 +1,7 @@
 """
 Accès à la base de données locale (SQLite).
 
-SQLite a été choisi volontairement plutôt que Postgres/MySQL : Ghost Cards
+SQLite a été choisi volontairement plutôt que Postgres/MySQL : Ghost School
 tourne sur une seule machine (l'OptiPlex), donc pas besoin d'un serveur de
 base de données séparé à installer, sauvegarder et surveiller. Le mode WAL
 permet de lire pendant qu'une synchronisation écrit, sans verrouillage.

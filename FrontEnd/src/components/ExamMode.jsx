@@ -83,7 +83,11 @@ function ExamQuizQuestion({ question, onAnswer }) {
   );
 }
 
-function ScoreEcran({ flashcardResults, quizResults, onExit, C }) {
+// Partagé entre l'écran de score et `onFinish` (voir ExamMode) : le
+// résultat doit être calculé au même endroit pour que ce qui est affiché
+// et ce qui est mémorisé (dernier résultat sur la page du cours) soient
+// toujours identiques.
+function calculerResultat(flashcardResults, quizResults) {
   const totalFlashcards = flashcardResults.length;
   const savais = flashcardResults.filter(Boolean).length;
   const totalQuiz = quizResults.length;
@@ -91,6 +95,12 @@ function ScoreEcran({ flashcardResults, quizResults, onExit, C }) {
   const totalReponses = totalFlashcards + totalQuiz;
   const totalReussies = savais + correctes;
   const pourcentage = totalReponses > 0 ? Math.round((totalReussies / totalReponses) * 100) : 0;
+  return { totalFlashcards, savais, totalQuiz, correctes, totalReponses, totalReussies, pourcentage };
+}
+
+function ScoreEcran({ flashcardResults, quizResults, onExit, C }) {
+  const { totalFlashcards, savais, totalQuiz, correctes, totalReponses, totalReussies, pourcentage } =
+    calculerResultat(flashcardResults, quizResults);
 
   return (
     <div className="gc-materialize" style={{ textAlign: "center", padding: "32px 16px" }}>
@@ -121,7 +131,7 @@ function ScoreEcran({ flashcardResults, quizResults, onExit, C }) {
   );
 }
 
-export function ExamMode({ flashcards, quiz, onExit }) {
+export function ExamMode({ flashcards, quiz, onExit, onFinish }) {
   const { C } = useTheme();
   // Séquence flashcards → quiz → score, en sautant une étape vide (un
   // cours peut n'avoir que des flashcards, ou que du quiz).
@@ -131,18 +141,27 @@ export function ExamMode({ flashcards, quiz, onExit }) {
   const [quizIndex, setQuizIndex] = useState(0);
   const [quizResults, setQuizResults] = useState([]);
 
+  // Mémorisé dès que le résultat est connu (pas seulement au clic sur
+  // "Terminer") : sinon fermer l'onglet depuis l'écran de score perdrait
+  // le résultat pour la page du cours (voir CoursDetail::onFinish).
+  function terminer(flashcardResultsFinal, quizResultsFinal) {
+    setPhase("score");
+    onFinish?.(calculerResultat(flashcardResultsFinal, quizResultsFinal));
+  }
+
   function repondreFlashcard(savais) {
     const resultats = [...flashcardResults, savais];
     setFlashcardResults(resultats);
     if (flashcardIndex + 1 < flashcards.length) setFlashcardIndex(flashcardIndex + 1);
-    else setPhase(quiz.length > 0 ? "quiz" : "score");
+    else if (quiz.length > 0) setPhase("quiz");
+    else terminer(resultats, quizResults);
   }
 
   function repondreQuiz(correcte) {
     const resultats = [...quizResults, correcte];
     setQuizResults(resultats);
     if (quizIndex + 1 < quiz.length) setQuizIndex(quizIndex + 1);
-    else setPhase("score");
+    else terminer(flashcardResults, resultats);
   }
 
   if (phase === "score") {

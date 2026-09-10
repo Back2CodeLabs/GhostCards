@@ -1,5 +1,5 @@
 """
-API locale de Ghost Cards.
+API locale de Ghost School.
 
 Sert les données stockées en SQLite/disque au frontend, et expose un
 déclencheur de synchronisation Pronote. Pensée pour tourner en permanence
@@ -60,7 +60,7 @@ if not SESSION_SECRET_KEY:
         "service. Génère-en une avec : python3 -c \"import secrets; print(secrets.token_hex(32))\""
     )
 
-app = FastAPI(title="Ghost Cards API")
+app = FastAPI(title="Ghost School API")
 
 app.add_middleware(
     SessionMiddleware,
@@ -89,7 +89,7 @@ def on_startup():
     # de publication des cours de l'établissement.
     scheduler.add_job(pronote_sync.sync, "interval", hours=2, id="pronote_sync", max_instances=1)
     scheduler.start()
-    log.info("Ghost Cards API démarrée — synchronisation automatique toutes les 2h.")
+    log.info("Ghost School API démarrée — synchronisation automatique toutes les 2h.")
 
 
 @app.on_event("shutdown")
@@ -178,7 +178,7 @@ async def auth_callback(request: Request):
     if GOOGLE_HOSTED_DOMAIN and userinfo.get("hd") != GOOGLE_HOSTED_DOMAIN:
         raise HTTPException(403, f"Seuls les comptes @{GOOGLE_HOSTED_DOMAIN} sont autorisés.")
     if not _email_autorise(email):
-        raise HTTPException(403, "Cette adresse n'est pas autorisée à se connecter à Ghost Cards.")
+        raise HTTPException(403, "Cette adresse n'est pas autorisée à se connecter à Ghost School.")
 
     with db.session() as conn:
         eleve_id = db.upsert_eleve(
@@ -789,7 +789,7 @@ class AssistantRequest(BaseModel):
 
 
 ASSISTANT_SYSTEM_PROMPT = (
-    "Tu es l'assistant IA de Ghost Cards, une application de révision pour un(e) élève. "
+    "Tu es l'assistant IA de Ghost School, une application de révision pour un(e) élève. "
     "Réponds en français, simplement, en 3 à 5 phrases maximum. Tu n'as pas encore accès "
     "aux documents détaillés de la classe : si la question porte sur un point précis d'un "
     "cours, dis-le et réponds avec tes connaissances générales sur le sujet."

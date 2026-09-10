@@ -11,11 +11,32 @@ import { ResultatFormatte } from "../components/ResultatFormatte";
 /* si le résultat n'est pas satisfaisant. Pas une fonctionnalité élève. */
 /* ------------------------------------------------------------------ */
 
-function traitementStatutInfo(C, statut) {
-  if (statut === "succes" || statut === "validee") return { label: statut === "validee" ? "Validée" : "Succès", color: C.spectral, Icon: CheckCircle2 };
+function traitementStatutInfo(C, statut, sansChangement = false) {
+  if (statut === "succes" || statut === "validee") {
+    // Une synchro Pronote qui n'a rien trouvé de neuf est un succès normal,
+    // pas une anomalie — mais visuellement identique à un succès "avec du
+    // contenu" jusqu'ici, ce qui obligeait à ouvrir chaque ligne pour savoir
+    // laquelle valait le coup d'œil. Couleur neutre plutôt que verte : un
+    // succès "vide" ne doit pas se remarquer autant qu'un vrai changement.
+    if (sansChangement) return { label: "Rien de neuf", color: C.inkFaint, Icon: CheckCircle2 };
+    return { label: statut === "validee" ? "Validée" : "Succès", color: C.spectral, Icon: CheckCircle2 };
+  }
   if (statut === "echec" || statut === "rejetee") return { label: statut === "rejetee" ? "Rejetée" : "Échec", color: C.brick, Icon: XCircle };
   if (statut === "en_attente") return { label: "En attente", color: C.inkFaint, Icon: Clock };
   return { label: "En cours", color: C.inkFaint, Icon: Loader2 };
+}
+
+// Une synchro Pronote réussie mais sans le moindre changement (0 nouveau
+// cours, 0 devoir, 0 document) — voir le JSON brut construit dans
+// Services/pronote_sync.py::sync (ctx.resultat = json.dumps(counters, ...)).
+function syncSansChangement(t) {
+  if (t.type !== "pronote_sync" || t.statut !== "succes" || !t.resultat) return false;
+  try {
+    const r = JSON.parse(t.resultat);
+    return (r.nouveaux_cours || 0) === 0 && (r.nouveaux_devoirs || 0) === 0 && (r.nouveaux_documents || 0) === 0;
+  } catch {
+    return false;
+  }
 }
 
 // Distingue visuellement les 3 familles de traitements (synchro Pronote,
@@ -176,7 +197,7 @@ export function TraitementsScreen({ onOpenTraitement }) {
           <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "0 0 4px" }}>{actionError}</p>
         )}
         {items.map((t) => {
-          const { label, color, Icon } = traitementStatutInfo(C, t.statut);
+          const { label, color, Icon } = traitementStatutInfo(C, t.statut, syncSansChangement(t));
           if (sousMenu === "demandes") {
             const enAttente = t.statut === "en_attente";
             return (
@@ -275,7 +296,7 @@ export function TraitementDetail({ traitementId, onBack, onOpenCours }) {
   if (traitement.error) return (<div><ScreenHeader title="Traitement" onBack={onBack} /><ApiError message={traitement.error} onRetry={traitement.reload} /></div>);
 
   const t = traitement.data;
-  const { label, color, Icon } = traitementStatutInfo(C, t.statut);
+  const { label, color, Icon } = traitementStatutInfo(C, t.statut, syncSansChangement(t));
   const typeInfo = traitementTypeInfo(C, t.type);
   const dureeAffichee = enCours
     ? formatDuree(now - new Date(t.created_at).getTime())

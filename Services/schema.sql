@@ -1,4 +1,4 @@
--- Ghost Cards — schéma de stockage local (SQLite)
+-- Ghost School — schéma de stockage local (SQLite)
 -- Un seul fichier .db sur le disque de l'OptiPlex, pas de serveur de base de données à gérer.
 
 PRAGMA foreign_keys = ON;

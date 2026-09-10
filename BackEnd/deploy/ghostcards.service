@@ -1,5 +1,5 @@
 [Unit]
-Description=Ghost Cards API
+Description=Ghost School API
 After=network-online.target
 Wants=network-online.target
 

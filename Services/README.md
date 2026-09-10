@@ -1,6 +1,6 @@
-# Ghost Cards — Services
+# Ghost School — Services
 
-Logique métier de Ghost Cards : synchronisation Pronote et (bientôt)
+Logique métier de Ghost School : synchronisation Pronote et (bientôt)
 génération IA des résumés/flashcards/quiz. Utilisé aussi bien par l'API
 (`BackEnd/app/main.py`) que par les scripts en ligne de commande ci-dessous.
 
@@ -206,7 +206,7 @@ dépôt de notes est concerné par cette limitation.
 1. Va sur [Google Cloud Console](https://console.cloud.google.com/), crée un
    projet (ou réutilise un projet existant).
 2. **APIs et services → Écran de consentement OAuth** : configure-le en
-   "Externe", renseigne un nom d'application ("Ghost Cards"), ton email.
+   "Externe", renseigne un nom d'application ("Ghost School"), ton email.
    Statut "Testing" (pas besoin de validation Google pour une classe) — dans
    ce mode, tu dois ajouter chaque élève comme "utilisateur test" tant que
    l'appli n'est pas publiée, **ou** publier l'appli (sans validation

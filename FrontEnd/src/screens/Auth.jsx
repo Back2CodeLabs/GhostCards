@@ -69,7 +69,7 @@ export function AdminLoginScreen({ onBack, me }) {
           Accès du Maître Fantôme
         </h2>
         <p style={{ fontFamily: uiFont, fontSize: 13.5, color: C.inkSoft, lineHeight: 1.6, margin: "0 0 22px", maxWidth: 320, marginLeft: "auto", marginRight: "auto" }}>
-          Réservé au Maître Fantôme, gardien de Ghost Cards, pour voir et relancer les traitements OCR en arrière-plan.
+          Réservé au Maître Fantôme, gardien de Ghost School, pour voir et relancer les traitements OCR en arrière-plan.
         </p>
         <input
           type="password"
