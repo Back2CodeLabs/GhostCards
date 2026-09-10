@@ -369,8 +369,10 @@ def relancer_traitement(traitement_id: int) -> None:
         from . import pronote_sync  # import tardif : évite toute dépendance circulaire au chargement du module
         pronote_sync.sync()
     elif row["cible_type"] == "cours":
-        from . import ia_generation  # idem
+        from . import ia_generation, ia_verification  # idem
         if row["type"] == "ia_completion":
             ia_generation.completer_pour_cours(row["cible_id"])
+        elif row["type"] == "ia_verification":
+            ia_verification.verifier_generation(row["cible_id"])
         else:
             ia_generation.generer_pour_cours(row["cible_id"])

@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
-import { ChevronRight, ListChecks, CheckCircle2, XCircle, Loader2, Sparkles, RotateCcw, RefreshCw, FileText } from "lucide-react";
+import { ChevronRight, ListChecks, CheckCircle2, XCircle, Loader2, Sparkles, RotateCcw, RefreshCw, FileText, Clock, Check, X, ShieldCheck } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 import { API_BASE, useApi } from "../api";
-import { Loading, ApiError, EmptyState, ScreenHeader, SousMenu } from "../components/Shared";
+import { Loading, ApiError, EmptyState, ScreenHeader, SousMenu, SOUS_MENU_EN_ATTENTE } from "../components/Shared";
 import { ResultatFormatte } from "../components/ResultatFormatte";
 
 /* ------------------------------------------------------------------ */
@@ -12,8 +12,9 @@ import { ResultatFormatte } from "../components/ResultatFormatte";
 /* ------------------------------------------------------------------ */
 
 function traitementStatutInfo(C, statut) {
-  if (statut === "succes") return { label: "Succès", color: C.spectral, Icon: CheckCircle2 };
-  if (statut === "echec") return { label: "Échec", color: C.brick, Icon: XCircle };
+  if (statut === "succes" || statut === "validee") return { label: statut === "validee" ? "Validée" : "Succès", color: C.spectral, Icon: CheckCircle2 };
+  if (statut === "echec" || statut === "rejetee") return { label: statut === "rejetee" ? "Rejetée" : "Échec", color: C.brick, Icon: XCircle };
+  if (statut === "en_attente") return { label: "En attente", color: C.inkFaint, Icon: Clock };
   return { label: "En cours", color: C.inkFaint, Icon: Loader2 };
 }
 
@@ -24,7 +25,9 @@ function traitementStatutInfo(C, statut) {
 function traitementTypeInfo(C, type) {
   if (type === "pronote_sync") return { label: "Synchro Pronote", Icon: RefreshCw, color: C.spectral, soft: C.spectralSoft };
   if (type === "ia_generation" || type === "ia_completion") return { label: "Génération IA", Icon: Sparkles, color: C.haunt, soft: C.hauntSoft };
+  if (type === "ia_verification") return { label: "Vérification IA", Icon: ShieldCheck, color: C.haunt, soft: C.hauntSoft };
   if (type === "transcription_document" || type === "transcription_note") return { label: "OCR", Icon: FileText, color: C.brick, soft: C.brickSoft };
+  if (type === "regeneration_demande") return { label: "Demande de régénération", Icon: Clock, color: C.inkSoft, soft: C.paperDim };
   return { label: type, Icon: ListChecks, color: C.inkFaint, soft: C.paperDim };
 }
 
@@ -63,8 +66,9 @@ function useNow(active, intervalMs = 1000) {
 // FrontEnd/src/components/Shared.jsx::SOUS_MENUS.
 function categorieTraitement(t) {
   if (t.type === "pronote_sync") return "pronote";
-  if (t.type === "ia_generation" || t.type === "ia_completion") return "ia";
+  if (t.type === "ia_generation" || t.type === "ia_completion" || t.type === "ia_verification") return "ia";
   if (t.type === "transcription_document" || t.type === "transcription_note") return "ocr";
+  if (t.type === "regeneration_demande") return "demandes";
   return null;
 }
 
@@ -72,8 +76,10 @@ function traitementTitre(t) {
   if (t.type === "pronote_sync") return "Synchronisation Pronote";
   if (t.type === "ia_generation") return `Génération IA · Cours #${t.cible_id}`;
   if (t.type === "ia_completion") return `Complément IA (+10) · Cours #${t.cible_id}`;
+  if (t.type === "ia_verification") return `Vérification IA · Cours #${t.cible_id}`;
   if (t.type === "transcription_document") return `OCR · Document #${t.cible_id}`;
   if (t.type === "transcription_note") return `OCR · Note #${t.cible_id}`;
+  if (t.type === "regeneration_demande") return `Demande de régénération · Cours #${t.cible_id}`;
   return `${t.type} · ${t.cible_type} #${t.cible_id}`;
 }
 
@@ -81,6 +87,7 @@ const MESSAGES_VIDES = {
   pronote: "Aucune synchronisation Pronote pour l'instant.",
   ia: "Aucune génération IA pour l'instant.",
   ocr: "Aucune extraction OCR pour l'instant.",
+  demandes: "Aucune demande de régénération en attente.",
 };
 
 export function TraitementsScreen({ onOpenTraitement }) {
@@ -89,6 +96,29 @@ export function TraitementsScreen({ onOpenTraitement }) {
   const [sousMenu, setSousMenu] = useState("pronote");
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState(null);
+  const [actingId, setActingId] = useState(null);
+  const [actionError, setActionError] = useState(null);
+
+  // Valide ou rejette une demande de régénération en attente (voir
+  // BackEnd/app/main.py::valider_demande_regeneration/rejeter_demande_regeneration) —
+  // évite qu'une régénération (coûteuse en tokens/temps de calcul) parte
+  // sans qu'un admin l'ait explicitement décidé.
+  async function traiterDemande(id, action) {
+    setActingId(id);
+    setActionError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/traitements/demandes/${id}/${action}`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Erreur ${res.status}`);
+      }
+      traitements.reload();
+    } catch (e) {
+      setActionError(e.message || "Impossible de traiter cette demande.");
+    } finally {
+      setActingId(null);
+    }
+  }
 
   async function lancerSync() {
     if (syncing) return;
@@ -121,7 +151,7 @@ export function TraitementsScreen({ onOpenTraitement }) {
         </p>
       </div>
       <div style={{ padding: "16px 0 0" }}>
-        <SousMenu actif={sousMenu} onChange={setSousMenu} />
+        <SousMenu actif={sousMenu} onChange={setSousMenu} extra={[SOUS_MENU_EN_ATTENTE]} />
       </div>
       {sousMenu === "pronote" && (
         <div style={{ padding: "0 20px 16px" }}>
@@ -142,8 +172,48 @@ export function TraitementsScreen({ onOpenTraitement }) {
         {traitements.data && items.length === 0 && (
           <EmptyState text={MESSAGES_VIDES[sousMenu]} icon={ListChecks} />
         )}
+        {sousMenu === "demandes" && actionError && (
+          <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "0 0 4px" }}>{actionError}</p>
+        )}
         {items.map((t) => {
           const { label, color, Icon } = traitementStatutInfo(C, t.statut);
+          if (sousMenu === "demandes") {
+            const enAttente = t.statut === "en_attente";
+            return (
+              <div
+                key={t.id}
+                style={{ display: "flex", alignItems: "center", gap: 10, background: C.white, border: `1px solid ${C.line}`, borderLeft: `3px solid ${color}`, borderRadius: 10, padding: "12px 14px", fontFamily: uiFont }}
+              >
+                <Icon size={16} color={color} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, color: C.ink, fontWeight: 600 }}>{traitementTitre(t)}</div>
+                  <div style={{ fontSize: 12, color: C.inkSoft, marginTop: 2 }}>
+                    {label} · {new Date(t.created_at).toLocaleString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                  </div>
+                </div>
+                {enAttente && (
+                  <div className="flex items-center gap-2" style={{ flexShrink: 0 }}>
+                    <button
+                      onClick={() => traiterDemande(t.id, "valider")}
+                      disabled={actingId === t.id}
+                      title="Valider et lancer la régénération"
+                      style={{ display: "flex", alignItems: "center", gap: 4, background: C.hauntSoft, color: C.haunt, border: "none", borderRadius: 8, padding: "7px 10px", fontFamily: uiFont, fontSize: 12, fontWeight: 700, cursor: actingId === t.id ? "default" : "pointer" }}
+                    >
+                      <Check size={13} /> Valider
+                    </button>
+                    <button
+                      onClick={() => traiterDemande(t.id, "rejeter")}
+                      disabled={actingId === t.id}
+                      title="Rejeter la demande"
+                      style={{ display: "flex", alignItems: "center", gap: 4, background: "transparent", color: C.inkFaint, border: `1px solid ${C.line}`, borderRadius: 8, padding: "7px 10px", fontFamily: uiFont, fontSize: 12, fontWeight: 700, cursor: actingId === t.id ? "default" : "pointer" }}
+                    >
+                      <X size={13} /> Rejeter
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          }
           return (
             <button
               key={t.id}
@@ -168,7 +238,7 @@ export function TraitementsScreen({ onOpenTraitement }) {
   );
 }
 
-export function TraitementDetail({ traitementId, onBack }) {
+export function TraitementDetail({ traitementId, onBack, onOpenCours }) {
   const { C } = useTheme();
   const traitement = useApi(`/api/traitements/${traitementId}`, [traitementId]);
   const [relancing, setRelancing] = useState(false);
@@ -232,6 +302,15 @@ export function TraitementDetail({ traitementId, onBack }) {
           Lancé le {formatDateHeure(t.created_at)}
           {t.finished_at ? ` · terminé le ${formatDateHeure(t.finished_at)}` : ""}
         </p>
+
+        {t.cible_type === "cours" && onOpenCours && (
+          <button
+            onClick={() => onOpenCours(t.cible_id)}
+            style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, background: "transparent", border: "none", color: C.haunt, fontFamily: uiFont, fontSize: 12, fontWeight: 700, cursor: "pointer", padding: 0 }}
+          >
+            Voir le cours →
+          </button>
+        )}
 
         {t.erreur && (
           <div style={{ marginTop: 16, background: C.brickSoft, border: `1px solid ${C.line}`, borderRadius: 12, padding: 16 }}>

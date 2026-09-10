@@ -164,14 +164,18 @@ GENERATION_JSON_FORMAT = (
     '"quiz": [{"question": "...", "options": ["...", "...", "...", "..."], "reponse_index": 0}]}'
 )
 
-PROMPT_COMPLEMENT_CONSIGNE_DEFAUT = """Voici les questions déjà utilisées pour ce cours (à ne pas répéter à l'identique) :
+PROMPT_COMPLEMENT_CONSIGNE_DEFAUT = """Voici les questions déjà utilisées pour ce cours (à ne pas répéter, même reformulées) :
 Flashcards existantes : {questions_flashcards}
 Quiz existant : {questions_quiz}
 
-Génère {n} NOUVELLES flashcards de révision (différentes des précédentes,
-question courte / réponse courte, 1 phrase maximum) et {n} NOUVELLES
-questions de quiz à choix multiple (4 options, une seule correcte,
-différentes des précédentes), à partir de ce même cours."""
+Génère {n} NOUVELLES flashcards de révision (question courte, réponse
+courte, 1 phrase maximum) et {n} NOUVELLES questions de quiz à choix
+multiple (4 options, une seule correcte), à partir de ce même cours.
+Elles doivent porter sur des notions ou aspects DIFFÉRENTS de ceux déjà
+couverts ci-dessus : une question reformulée avec d'autres mots mais qui
+attend la même réponse (même notion) compte comme une répétition, pas
+comme une nouvelle question. Privilégie des éléments du cours pas encore
+interrogés plutôt que de redemander ce qui l'a déjà été sous un autre angle."""
 
 COMPLEMENT_JSON_FORMAT = (
     "Réponds UNIQUEMENT avec un JSON valide, rien d'autre, dans ce format exact,\n"

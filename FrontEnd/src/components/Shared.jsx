@@ -1,4 +1,4 @@
-import { ArrowLeft, Ghost, RefreshCw, WifiOff, Sparkles, FileText, TriangleAlert } from "lucide-react";
+import { ArrowLeft, Ghost, RefreshCw, WifiOff, Sparkles, FileText, TriangleAlert, ScrollText, Clock, ShieldCheck } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 
 /* ------------------------------------------------------------------ */
@@ -117,11 +117,27 @@ export const SOUS_MENUS = [
   { key: "ocr", label: "OCR", Icon: FileText },
 ];
 
-export function SousMenu({ actif, onChange }) {
+// Onglet "Prompts" : uniquement pertinent pour Paramétrage (rien à filtrer
+// côté Traitements) — passé en `extra` plutôt qu'ajouté à SOUS_MENUS pour
+// ne pas faire apparaître un onglet vide dans l'écran Traitements, qui
+// partage le même composant/la même liste de base.
+export const SOUS_MENU_PROMPTS = { key: "prompts", label: "Prompts", Icon: ScrollText };
+
+// Idem : la config du modèle de vérification (Services/ia_verification.py)
+// n'a rien à faire dans l'écran Traitements.
+export const SOUS_MENU_VERIFICATION = { key: "verification", label: "Vérification", Icon: ShieldCheck };
+
+// Idem, côté Traitements cette fois : les demandes de régénération en
+// attente de validation admin n'ont pas leur place dans Pronote/Génération
+// IA/OCR (ce ne sont pas encore des traitements exécutés).
+export const SOUS_MENU_EN_ATTENTE = { key: "demandes", label: "En attente", Icon: Clock };
+
+export function SousMenu({ actif, onChange, extra }) {
   const { C } = useTheme();
+  const menus = extra ? [...SOUS_MENUS, ...extra] : SOUS_MENUS;
   return (
     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "0 20px 16px" }}>
-      {SOUS_MENUS.map((m) => {
+      {menus.map((m) => {
         const active = actif === m.key;
         return (
           <button

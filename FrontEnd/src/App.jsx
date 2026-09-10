@@ -72,13 +72,13 @@ export default function App() {
   if (top?.screen === "subject") {
     content = <SubjectDetail subjectId={top.params.id} subjectName={top.params.nom} onBack={pop} onOpenCours={openCours} />;
   } else if (top?.screen === "cours") {
-    content = <CoursDetail coursId={top.params.id} onBack={pop} me={me} onRequireLogin={requireLogin} />;
+    content = <CoursDetail coursId={top.params.id} onBack={pop} me={me} onRequireLogin={requireLogin} onOpenTraitement={openTraitement} />;
   } else if (top?.screen === "login") {
     content = <LoginScreen onBack={pop} />;
   } else if (top?.screen === "admin-login") {
     content = <AdminLoginScreen onBack={pop} me={me} />;
   } else if (top?.screen === "traitement") {
-    content = <TraitementDetail traitementId={top.params.id} onBack={pop} />;
+    content = <TraitementDetail traitementId={top.params.id} onBack={pop} onOpenCours={openCours} />;
   } else if (tab === "home") {
     content = <HomeScreen onOpenSubject={openSubject} onOpenCours={openCours} />;
   } else if (tab === "subjects") {

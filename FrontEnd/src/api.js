@@ -21,13 +21,19 @@ export async function apiGet(path) {
 /* ------------------------------------------------------------------ */
 
 export function useApi(path, deps = []) {
-  const [state, setState] = useState({ data: null, loading: true, error: null });
+  // `loaded` (distinct de `data`, qui peut légitimement être null en
+  // réponse normale) permet de ne montrer le plein écran "Loading" qu'au
+  // tout premier chargement : un `reload()` de fond (polling d'un
+  // traitement en cours, par ex.) ne doit pas démonter tout l'écran pour
+  // le remplacer par un spinner puis le remonter 5s plus tard — c'est ce
+  // qui donnait la sensation de "saut" en haut de page à chaque poll.
+  const [state, setState] = useState({ data: null, loading: true, error: null, loaded: false });
 
   const load = useCallback(() => {
-    setState((s) => ({ ...s, loading: true, error: null }));
+    setState((s) => ({ ...s, loading: !s.loaded, error: null }));
     apiGet(path)
-      .then((data) => setState({ data, loading: false, error: null }))
-      .catch((e) => setState({ data: null, loading: false, error: e.message }));
+      .then((data) => setState({ data, loading: false, error: null, loaded: true }))
+      .catch((e) => setState((s) => ({ ...s, loading: false, error: e.message, loaded: true })));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 

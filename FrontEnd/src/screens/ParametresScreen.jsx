@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { RefreshCw, CheckCircle2, XCircle } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 import { API_BASE, useApi } from "../api";
-import { Loading, ApiError, SousMenu } from "../components/Shared";
+import { Loading, ApiError, SousMenu, SOUS_MENU_PROMPTS, SOUS_MENU_VERIFICATION } from "../components/Shared";
 
 /* ------------------------------------------------------------------ */
 /* Paramétrage — 3 sous-menus (Pronote / Génération IA / OCR), admin     */
@@ -18,6 +18,15 @@ const MOTEURS_IA = [
 const MOTEURS_OCR = [
   { id: "paddleocr", nom: "PaddleOCR (local, gratuit)", desc: "Tourne sur le serveur, aucune donnée envoyée à l'extérieur. Nécessite un venv Python ≤3.13 (voir HANDOFF.md)." },
   { id: "claude", nom: "Claude (Anthropic)", desc: "Meilleur sur l'écriture manuscrite réelle, mais coûte du crédit API par image transcrite. Réutilise la clé Anthropic du bloc Génération IA." },
+];
+
+// Moteur de VÉRIFICATION : indépendant de celui de Génération IA (voir
+// Services/ia_verification.py::config_verif) — l'intérêt est justement de
+// pouvoir croiser le regard d'un modèle différent de celui qui a généré.
+const MOTEURS_VERIF = [
+  { id: "claude", nom: "Claude (Anthropic)", desc: "Réutilise la clé Anthropic du sous-menu Génération IA. Bon choix par défaut pour vérifier un contenu généré par un modèle local." },
+  { id: "gemini", nom: "Gemini (Google)", desc: "Réutilise la clé Gemini du sous-menu Génération IA." },
+  { id: "ollama", nom: "Ollama (local, gratuit)", desc: "Peut être le même serveur que la génération, ou un autre modèle installé dessus — mais vérifier avec le modèle qui a généré perd l'intérêt du regard croisé." },
 ];
 
 function formatDateHeure(iso) {
@@ -76,6 +85,13 @@ export function ParametresScreen() {
   const [syncDaysBack, setSyncDaysBack] = useState("");
   const [syncDaysForward, setSyncDaysForward] = useState("");
   const [ocrEngine, setOcrEngine] = useState("paddleocr");
+  const [verifMoteur, setVerifMoteur] = useState("claude");
+  const [verifOllamaUrl, setVerifOllamaUrl] = useState("");
+  const [verifOllamaModel, setVerifOllamaModel] = useState("");
+  const [verifGeminiModel, setVerifGeminiModel] = useState("");
+  const [verifOllamaModeles, setVerifOllamaModeles] = useState([]);
+  const [verifOllamaModelesLoading, setVerifOllamaModelesLoading] = useState(false);
+  const [verifOllamaModelesError, setVerifOllamaModelesError] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const [saveOk, setSaveOk] = useState(false);
@@ -94,28 +110,42 @@ export function ParametresScreen() {
       setSyncDaysBack(String(parametres.data.sync_days_back ?? ""));
       setSyncDaysForward(String(parametres.data.sync_days_forward ?? ""));
       setOcrEngine(parametres.data.ocr_engine || "paddleocr");
+      setVerifMoteur(parametres.data.verif_moteur || "claude");
+      setVerifOllamaUrl(parametres.data.verif_ollama_url || "");
+      setVerifOllamaModel(parametres.data.verif_ollama_model || "");
+      setVerifGeminiModel(parametres.data.verif_gemini_model || "");
     }
   }, [parametres.data]);
 
-  async function chargerModelesOllama() {
-    setOllamaModelesLoading(true);
-    setOllamaModelesError(null);
+  // Factorisé pour être réutilisé par les onglets Génération IA ET
+  // Vérification (deux serveurs Ollama potentiellement différents).
+  async function chargerModelesOllamaGenerique(url, { setModeles, setLoading, setError }) {
+    setLoading(true);
+    setError(null);
     try {
-      const qs = ollamaUrl.trim() ? `?url=${encodeURIComponent(ollamaUrl.trim())}` : "";
+      const qs = url.trim() ? `?url=${encodeURIComponent(url.trim())}` : "";
       const res = await fetch(`${API_BASE}/api/parametres/ollama-modeles${qs}`);
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || `Erreur ${res.status}`);
       }
       const data = await res.json();
-      setOllamaModeles(data.modeles || []);
-      if (data.modeles?.length === 0) setOllamaModelesError("Aucun modèle installé sur ce serveur Ollama.");
+      setModeles(data.modeles || []);
+      if (data.modeles?.length === 0) setError("Aucun modèle installé sur ce serveur Ollama.");
     } catch (e) {
-      setOllamaModeles([]);
-      setOllamaModelesError(e.message || "Impossible de récupérer la liste des modèles.");
+      setModeles([]);
+      setError(e.message || "Impossible de récupérer la liste des modèles.");
     } finally {
-      setOllamaModelesLoading(false);
+      setLoading(false);
     }
+  }
+
+  function chargerModelesOllama() {
+    chargerModelesOllamaGenerique(ollamaUrl, { setModeles: setOllamaModeles, setLoading: setOllamaModelesLoading, setError: setOllamaModelesError });
+  }
+
+  function chargerModelesVerifOllama() {
+    chargerModelesOllamaGenerique(verifOllamaUrl, { setModeles: setVerifOllamaModeles, setLoading: setVerifOllamaModelesLoading, setError: setVerifOllamaModelesError });
   }
 
   async function enregistrer() {
@@ -136,6 +166,10 @@ export function ParametresScreen() {
         sync_days_back: syncDaysBack.trim() ? parseInt(syncDaysBack, 10) : null,
         sync_days_forward: syncDaysForward.trim() ? parseInt(syncDaysForward, 10) : null,
         ocr_engine: ocrEngine,
+        verif_moteur: verifMoteur,
+        verif_ollama_url: verifOllamaUrl.trim() || null,
+        verif_ollama_model: verifOllamaModel.trim() || null,
+        verif_gemini_model: verifGeminiModel.trim() || null,
       };
       if (geminiKey.trim()) body.gemini_api_key = geminiKey.trim();
       if (anthropicKey.trim()) body.anthropic_api_key = anthropicKey.trim();
@@ -170,7 +204,7 @@ export function ParametresScreen() {
         <h1 style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 24, color: C.ink, margin: 0 }}>Paramétrage</h1>
       </div>
       <div style={{ padding: "16px 0 0" }}>
-        <SousMenu actif={sousMenu} onChange={setSousMenu} />
+        <SousMenu actif={sousMenu} onChange={setSousMenu} extra={[SOUS_MENU_PROMPTS, SOUS_MENU_VERIFICATION]} />
       </div>
       <div style={{ padding: "0 20px 16px", display: "flex", flexDirection: "column", gap: 16 }}>
         {parametres.loading && <Loading />}
@@ -392,11 +426,13 @@ export function ParametresScreen() {
                 </p>
               </div>
             )}
+          </div>
+        )}
 
-            <div style={{ height: 1, background: C.line, margin: "16px 0" }} />
-
-            <h3 style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 15, color: C.ink, margin: "0 0 4px" }}>Prompts</h3>
-            <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: "0 0 12px" }}>
+        {parametres.data && sousMenu === "prompts" && (
+          <div style={carteStyle}>
+            <h2 style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 17, color: C.ink, margin: "0 0 4px" }}>Prompts</h2>
+            <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: "0 0 14px" }}>
               Modifiable en partie seulement : le contenu du cours est toujours ajouté en premier, et le
               format JSON attendu en sortie reste fixe (l'application le lit tel quel). Seule la consigne du
               milieu — ce qu'on demande de produire — peut être personnalisée.
@@ -457,6 +493,83 @@ export function ParametresScreen() {
                 <p style={{ fontFamily: uiFont, fontSize: 12, color: C.inkFaint, margin: 0 }}>
                   Même clé que le sous-menu Génération IA (un seul compte Anthropic pour toute l'application).
                 </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {parametres.data && sousMenu === "verification" && (
+          <div style={carteStyle}>
+            <h2 style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 17, color: C.ink, margin: "0 0 4px" }}>Vérification</h2>
+            <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: "0 0 14px" }}>
+              Moteur utilisé pour évaluer la fiabilité d'une génération déjà en place (bouton "Vérifier" dans le
+              détail d'un cours) : confronte résumé/flashcards/quiz au texte source et donne un score par élément.
+            </p>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+              {MOTEURS_VERIF.map((m) => (
+                <label
+                  key={m.id}
+                  style={{ display: "flex", gap: 10, alignItems: "flex-start", background: C.paperDim, border: `1px solid ${verifMoteur === m.id ? C.haunt : C.line}`, borderRadius: 10, padding: "12px 14px", cursor: "pointer" }}
+                >
+                  <input type="radio" checked={verifMoteur === m.id} onChange={() => setVerifMoteur(m.id)} style={{ marginTop: 3 }} />
+                  <div>
+                    <div style={{ fontFamily: uiFont, fontSize: 13.5, fontWeight: 700, color: C.ink }}>{m.nom}</div>
+                    <div style={{ fontFamily: uiFont, fontSize: 12, color: C.inkSoft, marginTop: 2 }}>{m.desc}</div>
+                  </div>
+                </label>
+              ))}
+            </div>
+
+            {verifMoteur === "ollama" && (
+              <div style={sousCarteStyle}>
+                <div>
+                  <label style={labelStyle}>URL DU SERVEUR OLLAMA</label>
+                  <input value={verifOllamaUrl} onChange={(e) => setVerifOllamaUrl(e.target.value)} placeholder="http://127.0.0.1:11434" style={inputStyle} />
+                </div>
+                <div>
+                  <label style={labelStyle}>MODÈLE</label>
+                  <div className="flex items-center gap-2">
+                    <input value={verifOllamaModel} onChange={(e) => setVerifOllamaModel(e.target.value)} placeholder="qwen3:14b" style={inputStyle} />
+                    <button
+                      onClick={chargerModelesVerifOllama}
+                      disabled={verifOllamaModelesLoading}
+                      title="Interroger le serveur Ollama pour lister les modèles installés"
+                      style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 6, background: C.white, border: `1px solid ${C.line}`, borderRadius: 8, padding: "8px 12px", fontFamily: uiFont, fontSize: 12, fontWeight: 600, color: C.inkSoft, cursor: verifOllamaModelesLoading ? "default" : "pointer" }}
+                    >
+                      <RefreshCw size={13} style={verifOllamaModelesLoading ? { animation: "spin 1s linear infinite" } : {}} />
+                      {verifOllamaModelesLoading ? "Recherche…" : "Détecter"}
+                    </button>
+                  </div>
+                  {verifOllamaModelesError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "6px 0 0" }}>{verifOllamaModelesError}</p>}
+                  {verifOllamaModeles.length > 0 && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                      {verifOllamaModeles.map((nom) => (
+                        <button
+                          key={nom}
+                          onClick={() => setVerifOllamaModel(nom)}
+                          style={{
+                            background: verifOllamaModel === nom ? C.hauntSoft : C.white,
+                            border: `1px solid ${verifOllamaModel === nom ? C.haunt : C.line}`,
+                            color: verifOllamaModel === nom ? C.haunt : C.inkSoft,
+                            borderRadius: 999, padding: "4px 10px", fontFamily: uiFont, fontSize: 11.5, fontWeight: 600, cursor: "pointer",
+                          }}
+                        >
+                          {nom}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {verifMoteur === "gemini" && (
+              <div style={sousCarteStyle}>
+                <div>
+                  <label style={labelStyle}>MODÈLE GEMINI</label>
+                  <input value={verifGeminiModel} onChange={(e) => setVerifGeminiModel(e.target.value)} placeholder="gemini-3.5-flash-lite" style={inputStyle} />
+                </div>
               </div>
             )}
           </div>

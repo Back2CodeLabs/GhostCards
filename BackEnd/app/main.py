@@ -29,7 +29,7 @@ _GHOSTCARDS_ROOT = Path(__file__).resolve().parents[2]  # BackEnd/app/main.py ->
 if str(_GHOSTCARDS_ROOT) not in sys.path:
     sys.path.insert(0, str(_GHOSTCARDS_ROOT))
 
-from Services import db, ia_generation, ocr, pronote_sync  # noqa: E402
+from Services import db, ia_generation, ia_verification, ocr, pronote_sync  # noqa: E402
 from Services.auth import oauth  # noqa: E402
 from Services.config import (  # noqa: E402
     DOCUMENTS_DIR,
@@ -280,7 +280,26 @@ def get_cours(cours_id: int):
             "SELECT id, auteur, contenu, type, statut, created_at FROM notes_eleves WHERE cours_id = ? ORDER BY created_at",
             (cours_id,),
         ).fetchall()
+        # Pour le lien "Voir le traitement" (admin, écran Traitements) depuis
+        # la section IA du cours — voir aussi le lien inverse, gratuit, dans
+        # TraitementDetail (cible_type/cible_id sont déjà dans /api/traitements/{id}).
+        ia_traitement = conn.execute(
+            """SELECT id FROM traitements WHERE cible_type = 'cours' AND cible_id = ?
+               AND type IN ('ia_generation', 'ia_completion') ORDER BY id DESC LIMIT 1""",
+            (cours_id,),
+        ).fetchone()
+        demande_en_attente = conn.execute(
+            "SELECT 1 FROM traitements WHERE type = 'regeneration_demande' AND cible_id = ? AND statut = 'en_attente'",
+            (cours_id,),
+        ).fetchone()
+        verif_traitement = conn.execute(
+            "SELECT id FROM traitements WHERE cible_type = 'cours' AND cible_id = ? AND type = 'ia_verification' ORDER BY id DESC LIMIT 1",
+            (cours_id,),
+        ).fetchone()
         c = dict(cours)
+        c["ia_traitement_id"] = ia_traitement["id"] if ia_traitement else None
+        c["regeneration_en_attente"] = demande_en_attente is not None
+        c["ia_verification_traitement_id"] = verif_traitement["id"] if verif_traitement else None
         # ia_flashcards/ia_quiz sont stockés en JSON texte (voir Services/ia_generation.py) :
         # décodés ici pour que le frontend reçoive de vraies structures, pas des chaînes.
         c["ia_flashcards"] = json.loads(c["ia_flashcards"]) if c.get("ia_flashcards") else []
@@ -302,13 +321,30 @@ def generer_contenu_ia(cours_id: int, background_tasks: BackgroundTasks):
     Services/ia_generation.py). Ouvert à tout le monde comme le reste de
     la consultation du site (pas besoin d'être connecté) ; le statut
     'en_cours' empêche simplement de relancer une génération déjà en vol.
+
+    Une PREMIÈRE génération (cours sans résumé encore) part immédiatement :
+    il n'y a rien à consulter sans elle. Une RÉGÉNÉRATION (le bouton
+    "Régénérer", sur un cours qui a déjà un résumé) coûte des tokens/du
+    temps de calcul pour un résultat pas forcément différent — n'importe
+    quel visiteur pouvant cliquer sans être connecté, elle passe par une
+    demande en attente que l'admin valide ou rejette depuis l'écran
+    Traitements → onglet "En attente", plutôt que de partir tout de suite.
     """
     with db.session() as conn:
-        cours = conn.execute("SELECT ia_statut FROM cours WHERE id = ?", (cours_id,)).fetchone()
+        cours = conn.execute("SELECT ia_statut, ia_resume FROM cours WHERE id = ?", (cours_id,)).fetchone()
         if cours is None:
             raise HTTPException(404, "Cours introuvable")
         if cours["ia_statut"] == "en_cours":
             return {"status": "deja_en_cours"}
+        if cours["ia_resume"]:
+            existante = conn.execute(
+                "SELECT id FROM traitements WHERE type = 'regeneration_demande' AND cible_id = ? AND statut = 'en_attente'",
+                (cours_id,),
+            ).fetchone()
+            if existante:
+                return {"status": "deja_en_attente", "demande_id": existante["id"]}
+            demande_id = db.creer_demande_regeneration(conn, cours_id)
+            return {"status": "demande_en_attente", "demande_id": demande_id}
         # Statut posé de façon synchrone, avant même de planifier la tâche
         # de fond : sinon le premier rechargement du frontend (juste après
         # cette réponse) peut arriver avant que la tâche n'ait eu la main,
@@ -316,6 +352,38 @@ def generer_contenu_ia(cours_id: int, background_tasks: BackgroundTasks):
         conn.execute("UPDATE cours SET ia_statut = 'en_cours' WHERE id = ?", (cours_id,))
     background_tasks.add_task(ia_generation.generer_pour_cours, cours_id)
     return {"status": "generation_lancee"}
+
+
+@app.post("/api/traitements/demandes/{demande_id}/valider")
+def valider_demande_regeneration(demande_id: int, request: Request, background_tasks: BackgroundTasks):
+    """Valide une demande de régénération en attente : lance enfin la génération, comme un /generer normal."""
+    _require_admin(request)
+    with db.session() as conn:
+        row = conn.execute(
+            "SELECT cible_id FROM traitements WHERE id = ? AND type = 'regeneration_demande' AND statut = 'en_attente'",
+            (demande_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(404, "Demande introuvable ou déjà traitée.")
+        cours_id = row["cible_id"]
+        conn.execute("UPDATE traitements SET statut = 'validee', finished_at = ? WHERE id = ?", (db.now_iso(), demande_id))
+        conn.execute("UPDATE cours SET ia_statut = 'en_cours' WHERE id = ?", (cours_id,))
+    background_tasks.add_task(ia_generation.generer_pour_cours, cours_id)
+    return {"status": "validee"}
+
+
+@app.post("/api/traitements/demandes/{demande_id}/rejeter")
+def rejeter_demande_regeneration(demande_id: int, request: Request):
+    _require_admin(request)
+    with db.session() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM traitements WHERE id = ? AND type = 'regeneration_demande' AND statut = 'en_attente'",
+            (demande_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(404, "Demande introuvable ou déjà traitée.")
+        conn.execute("UPDATE traitements SET statut = 'rejetee', finished_at = ? WHERE id = ?", (db.now_iso(), demande_id))
+    return {"status": "rejetee"}
 
 
 @app.post("/api/cours/{cours_id}/completer")
@@ -336,6 +404,28 @@ def completer_contenu_ia(cours_id: int, background_tasks: BackgroundTasks):
         conn.execute("UPDATE cours SET ia_statut = 'en_cours' WHERE id = ?", (cours_id,))
     background_tasks.add_task(ia_generation.completer_pour_cours, cours_id)
     return {"status": "completion_lancee"}
+
+
+@app.post("/api/cours/{cours_id}/verifier")
+def verifier_generation_ia(cours_id: int, request: Request, background_tasks: BackgroundTasks):
+    """
+    Lance une vérification de fiabilité (Services/ia_verification.py) —
+    outil de diagnostic admin, pas une action élève : confronte résumé/
+    flashcards/quiz au texte source avec le modèle configuré dans
+    Paramétrage → Vérification (indépendant de celui de Génération IA).
+    """
+    _require_admin(request)
+    with db.session() as conn:
+        cours = conn.execute("SELECT ia_statut, ia_resume FROM cours WHERE id = ?", (cours_id,)).fetchone()
+        if cours is None:
+            raise HTTPException(404, "Cours introuvable")
+        if cours["ia_statut"] == "en_cours":
+            raise HTTPException(400, "Une génération est en cours pour ce cours — attends qu'elle se termine.")
+        if not cours["ia_resume"]:
+            raise HTTPException(400, "Génère d'abord le résumé/flashcards/quiz avant de les vérifier.")
+        traitement_id = db.creer_traitement(conn, type="ia_verification", cible_type="cours", cible_id=cours_id)
+    background_tasks.add_task(ia_verification.verifier_generation, cours_id, traitement_id=traitement_id)
+    return {"status": "verification_lancee", "traitement_id": traitement_id}
 
 
 class NoteCreate(BaseModel):
@@ -497,6 +587,7 @@ def get_parametres(request: Request):
         ia_cfg = ia_generation.config_ia(conn)
         pronote_cfg = pronote_sync.config_pronote(conn)
         ocr_cfg = ocr.config_ocr(conn)
+        verif_cfg = ia_verification.config_verif(conn)
     return {
         "ia_moteur": moteur if moteur in ("ollama", "gemini", "claude") else "ollama",
         "ollama_url": ollama_url or OLLAMA_URL,
@@ -521,6 +612,12 @@ def get_parametres(request: Request):
         "sync_days_forward": pronote_cfg["sync_days_forward"],
         "pronote_jeton_present": CREDENTIALS_PATH.exists(),
         "ocr_engine": ocr_cfg["moteur"],
+        # Vérification (Services/ia_verification.py) : moteur indépendant de
+        # celui de Génération IA (même clés Anthropic/Gemini, partagées).
+        "verif_moteur": verif_cfg["moteur"],
+        "verif_ollama_url": verif_cfg["ollama_url"],
+        "verif_ollama_model": verif_cfg["ollama_model"],
+        "verif_gemini_model": verif_cfg["gemini_model"],
     }
 
 
@@ -557,6 +654,10 @@ class ParametresIA(BaseModel):
     sync_days_back: int | None = None
     sync_days_forward: int | None = None
     ocr_engine: str | None = None
+    verif_moteur: str | None = None
+    verif_ollama_url: str | None = None
+    verif_ollama_model: str | None = None
+    verif_gemini_model: str | None = None
 
 
 @app.put("/api/parametres")
@@ -572,6 +673,8 @@ def set_parametres(payload: ParametresIA, request: Request):
         raise HTTPException(400, "Moteur OCR invalide (attendu 'paddleocr' ou 'claude').")
     if payload.ollama_chunk_size is not None and payload.ollama_chunk_size < 1000:
         raise HTTPException(400, "La taille de découpage doit être d'au moins 1000 caractères.")
+    if payload.verif_moteur is not None and payload.verif_moteur not in ("ollama", "gemini", "claude"):
+        raise HTTPException(400, "Moteur de vérification invalide (attendu 'ollama', 'gemini' ou 'claude').")
     with db.session() as conn:
         db.set_parametre(conn, "ia_moteur", payload.ia_moteur)
         if payload.ollama_url:
@@ -600,6 +703,14 @@ def set_parametres(payload: ParametresIA, request: Request):
             db.set_parametre(conn, "sync_days_forward", str(payload.sync_days_forward))
         if payload.ocr_engine:
             db.set_parametre(conn, "ocr_engine", payload.ocr_engine)
+        if payload.verif_moteur:
+            db.set_parametre(conn, "verif_moteur", payload.verif_moteur)
+        if payload.verif_ollama_url:
+            db.set_parametre(conn, "verif_ollama_url", payload.verif_ollama_url)
+        if payload.verif_ollama_model:
+            db.set_parametre(conn, "verif_ollama_model", payload.verif_ollama_model)
+        if payload.verif_gemini_model:
+            db.set_parametre(conn, "verif_gemini_model", payload.verif_gemini_model)
     return {"ok": True}
 
 

@@ -1,14 +1,19 @@
 import { useState, useEffect, useRef } from "react";
-import { FileText, Download, LogIn, Paperclip, Sparkles, RefreshCw, Loader2, Ghost } from "lucide-react";
+import { FileText, Download, LogIn, Paperclip, Sparkles, RefreshCw, Loader2, Ghost, GraduationCap, ShieldCheck } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 import { API_BASE, useApi } from "../api";
 import { Loading, ApiError, ScreenHeader, AvertissementIA } from "../components/Shared";
+import { ExamMode } from "../components/ExamMode";
+
+// Durée de l'animation .gc-evaporate (index.css) — le mode examen ne
+// bascule qu'une fois le cours "évaporé", pas avant.
+const DUREE_EVAPORATION_MS = 600;
 
 /* ------------------------------------------------------------------ */
 /* Détail cours                                                         */
 /* ------------------------------------------------------------------ */
 
-export function CoursDetail({ coursId, onBack, me, onRequireLogin }) {
+export function CoursDetail({ coursId, onBack, me, onRequireLogin, onOpenTraitement }) {
   const { C } = useTheme();
   const cours = useApi(`/api/cours/${coursId}`, [coursId]);
   const [noteText, setNoteText] = useState("");
@@ -20,9 +25,23 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin }) {
 
   const [generating, setGenerating] = useState(false);
   const [generationError, setGenerationError] = useState(null);
+  const [regenMessage, setRegenMessage] = useState(null);
+  const [verifying, setVerifying] = useState(false);
+  const [verifyError, setVerifyError] = useState(null);
   const [completing, setCompleting] = useState(false);
   const [completingError, setCompletingError] = useState(null);
   const [resumeDetaille, setResumeDetaille] = useState(false);
+  // "off" (cours visible normalement) → "evaporating" (animation en cours,
+  // voir .gc-evaporate) → "active" (mode examen affiché, cours masqué).
+  const [examPhase, setExamPhase] = useState("off");
+
+  function entrerModeExamen() {
+    setExamPhase("evaporating");
+    setTimeout(() => setExamPhase("active"), DUREE_EVAPORATION_MS);
+  }
+  function quitterModeExamen() {
+    setExamPhase("off");
+  }
 
   // Tant qu'une note déposée en photo/PDF est en cours de transcription
   // (OCR en arrière-plan, voir Services/ocr.py) ou que la génération IA
@@ -41,17 +60,49 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin }) {
     if (generating) return;
     setGenerating(true);
     setGenerationError(null);
+    setRegenMessage(null);
     try {
       const res = await fetch(`${API_BASE}/api/cours/${coursId}/generer`, { method: "POST" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || `Erreur ${res.status}`);
       }
+      const data = await res.json();
+      // Régénérer un cours déjà généré coûte des tokens pour rien de neuf
+      // si personne ne valide : ça part en demande en attente (écran admin
+      // Traitements → "En attente") plutôt que de lancer tout de suite —
+      // seule une PREMIÈRE génération (cours sans résumé) part directement.
+      if (data.status === "demande_en_attente" || data.status === "deja_en_attente") {
+        setRegenMessage("Demande de régénération envoyée — en attente de validation par un admin.");
+      }
       cours.reload();
     } catch (e) {
       setGenerationError(e.message || "Impossible de lancer la génération.");
     } finally {
       setGenerating(false);
+    }
+  }
+
+  async function verifierFiabilite() {
+    if (verifying) return;
+    setVerifying(true);
+    setVerifyError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/cours/${coursId}/verifier`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Erreur ${res.status}`);
+      }
+      const data = await res.json();
+      // Navigue directement sur le suivi du traitement (comme "Lancer une
+      // synchronisation Pronote" depuis l'écran Traitements) : la
+      // vérification peut prendre du temps, pas la peine de rester bloqué
+      // sur cette page à attendre.
+      if (data.traitement_id) onOpenTraitement(data.traitement_id);
+    } catch (e) {
+      setVerifyError(e.message || "Impossible de lancer la vérification.");
+    } finally {
+      setVerifying(false);
     }
   }
 
@@ -131,7 +182,12 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin }) {
   return (
     <div style={{ paddingBottom: 28 }}>
       <ScreenHeader title={c.titre || "Cours"} onBack={onBack} />
-      <div style={{ padding: "16px 20px 0" }}>
+      {examPhase === "active" ? (
+        <div style={{ padding: "16px 20px 0" }}>
+          <ExamMode flashcards={c.ia_flashcards} quiz={c.ia_quiz} onExit={quitterModeExamen} />
+        </div>
+      ) : (
+      <div style={{ padding: "16px 20px 0" }} className={examPhase === "evaporating" ? "gc-evaporate" : ""}>
         <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkSoft, margin: 0 }}>
           {new Date(c.date).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })} · {c.heure_debut}
           {c.professeur ? ` · ${c.professeur}` : ""}
@@ -288,30 +344,15 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin }) {
               )}
             </div>
 
-            {c.ia_flashcards.length > 0 && (
-              <>
-                <p style={{ fontFamily: uiFont, fontSize: 11.5, fontWeight: 700, color: C.inkFaint, letterSpacing: 0.3, margin: "18px 0 8px" }}>
-                  FLASHCARDS ({c.ia_flashcards.length})
-                </p>
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {c.ia_flashcards.map((card, i) => (
-                    <Flashcard key={i} card={card} />
-                  ))}
-                </div>
-              </>
-            )}
-
-            {c.ia_quiz.length > 0 && (
-              <>
-                <p style={{ fontFamily: uiFont, fontSize: 11.5, fontWeight: 700, color: C.inkFaint, letterSpacing: 0.3, margin: "18px 0 8px" }}>
-                  QUIZ ({c.ia_quiz.length} questions)
-                </p>
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {c.ia_quiz.map((q, i) => (
-                    <QuizQuestion key={i} question={q} index={i} />
-                  ))}
-                </div>
-              </>
+            {(c.ia_flashcards.length > 0 || c.ia_quiz.length > 0) && (
+              <button
+                onClick={entrerModeExamen}
+                style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", marginTop: 16, background: C.haunt, color: C.onAccent, border: "none", borderRadius: 12, padding: "13px 16px", fontFamily: uiFont, fontSize: 13.5, fontWeight: 700, cursor: "pointer" }}
+              >
+                <GraduationCap size={16} /> Tester mes connaissances
+                {" "}({c.ia_flashcards.length} flashcard{c.ia_flashcards.length > 1 ? "s" : ""}
+                {c.ia_quiz.length > 0 ? `, ${c.ia_quiz.length} quiz` : ""})
+              </button>
             )}
 
             <div className="flex items-center gap-2" style={{ marginTop: 16 }}>
@@ -324,12 +365,65 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin }) {
               </button>
               <button
                 onClick={genererIA}
-                disabled={generating || c.ia_statut === "en_cours"}
-                style={{ display: "flex", alignItems: "center", gap: 8, background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "9px 16px", fontFamily: uiFont, fontSize: 12.5, fontWeight: 600, color: C.inkSoft, cursor: generating ? "default" : "pointer" }}
+                disabled={generating || completing || c.ia_statut === "en_cours" || c.regeneration_en_attente}
+                title={c.regeneration_en_attente ? "Une demande de régénération est déjà en attente de validation par un admin" : undefined}
+                style={{ display: "flex", alignItems: "center", gap: 8, background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "9px 16px", fontFamily: uiFont, fontSize: 12.5, fontWeight: 600, color: c.regeneration_en_attente ? C.inkFaint : C.inkSoft, cursor: generating || c.regeneration_en_attente ? "default" : "pointer", opacity: c.regeneration_en_attente ? 0.7 : 1 }}
               >
-                <RefreshCw size={13} style={generating ? { animation: "spin 1s linear infinite" } : {}} /> Régénérer
+                <RefreshCw size={13} style={generating ? { animation: "spin 1s linear infinite" } : {}} />
+                {c.regeneration_en_attente ? "En attente de validation…" : "Régénérer"}
               </button>
+              {me?.isAdmin && c.ia_traitement_id && (
+                <button
+                  onClick={() => onOpenTraitement(c.ia_traitement_id)}
+                  style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "none", color: C.inkFaint, fontFamily: uiFont, fontSize: 12, fontWeight: 600, cursor: "pointer", padding: "9px 4px" }}
+                >
+                  Voir le traitement →
+                </button>
+              )}
             </div>
+            {me?.isAdmin && (
+              <div className="flex items-center gap-2" style={{ marginTop: 10, flexWrap: "wrap" }}>
+                <button
+                  onClick={verifierFiabilite}
+                  disabled={verifying}
+                  style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${C.line}`, borderRadius: 8, padding: "6px 12px", fontFamily: uiFont, fontSize: 12, fontWeight: 600, color: C.inkSoft, cursor: verifying ? "default" : "pointer" }}
+                >
+                  <ShieldCheck size={13} /> {verifying ? "Lancement…" : "Vérifier la fiabilité"}
+                </button>
+                {c.ia_fiabilite != null && (
+                  <span
+                    style={{
+                      display: "inline-flex", alignItems: "center", gap: 5, borderRadius: 999, padding: "4px 10px",
+                      fontFamily: uiFont, fontSize: 11.5, fontWeight: 700,
+                      background: c.ia_fiabilite >= 70 ? C.spectralSoft : C.brickSoft,
+                      color: c.ia_fiabilite >= 70 ? C.spectral : C.brick,
+                    }}
+                  >
+                    Fiabilité {c.ia_fiabilite}%
+                  </span>
+                )}
+                {c.ia_verification_traitement_id && (
+                  <button
+                    onClick={() => onOpenTraitement(c.ia_verification_traitement_id)}
+                    style={{ background: "transparent", border: "none", color: C.inkFaint, fontFamily: uiFont, fontSize: 12, fontWeight: 600, cursor: "pointer", padding: "6px 4px" }}
+                  >
+                    Voir le détail →
+                  </button>
+                )}
+              </div>
+            )}
+            {me?.isAdmin && c.ia_fiabilite != null && c.ia_fiabilite < 70 && (
+              <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.brick, margin: "6px 0 0" }}>
+                Score bas — regarde le détail de la vérification pour voir ce qui est en cause, puis envisage de
+                régénérer (bouton "Régénérer" ci-dessus).
+              </p>
+            )}
+            {verifyError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "6px 0 0" }}>{verifyError}</p>}
+            {(regenMessage || c.regeneration_en_attente) && (
+              <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: "8px 0 0" }}>
+                {regenMessage || "Une demande de régénération est en attente de validation par un admin."}
+              </p>
+            )}
             {c.ia_statut === "en_cours" && (
               <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: "8px 0 0", display: "flex", alignItems: "center", gap: 6 }}>
                 <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> Mise à jour en cours… (le contenu ci-dessus reste celui de la dernière génération réussie)
@@ -386,57 +480,7 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin }) {
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-function Flashcard({ card }) {
-  const { C } = useTheme();
-  const [revealed, setRevealed] = useState(false);
-  return (
-    <button
-      onClick={() => setRevealed((r) => !r)}
-      style={{ display: "block", width: "100%", textAlign: "left", background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px", cursor: "pointer", fontFamily: uiFont }}
-    >
-      <div style={{ fontSize: 13.5, color: C.ink, fontWeight: 600 }}>{card.question}</div>
-      {revealed ? (
-        <div style={{ fontSize: 13, color: C.spectral, marginTop: 6 }}>{card.reponse}</div>
-      ) : (
-        <div style={{ fontSize: 12, color: C.inkFaint, marginTop: 6 }}>Toucher pour voir la réponse</div>
       )}
-    </button>
-  );
-}
-
-function QuizQuestion({ question, index }) {
-  const { C } = useTheme();
-  const [choix, setChoix] = useState(null);
-  return (
-    <div style={{ background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px" }}>
-      <div style={{ fontSize: 13.5, color: C.ink, fontWeight: 600, marginBottom: 8 }}>
-        {index + 1}. {question.question}
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {question.options.map((opt, i) => {
-          const estChoisie = choix === i;
-          const estCorrecte = i === question.reponse_index;
-          let bg = C.paperDim;
-          let border = C.line;
-          if (choix !== null && estCorrecte) border = C.spectral;
-          else if (estChoisie && !estCorrecte) border = C.brick;
-          if (choix !== null && estCorrecte) bg = C.spectralSoft;
-          else if (estChoisie && !estCorrecte) bg = C.brickSoft;
-          return (
-            <button
-              key={i}
-              onClick={() => choix === null && setChoix(i)}
-              style={{ textAlign: "left", background: bg, border: `1px solid ${border}`, borderRadius: 8, padding: "8px 12px", fontFamily: uiFont, fontSize: 13, color: C.ink, cursor: choix === null ? "pointer" : "default" }}
-            >
-              {opt}
-            </button>
-          );
-        })}
-      </div>
     </div>
   );
 }

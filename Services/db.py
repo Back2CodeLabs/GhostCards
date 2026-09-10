@@ -74,6 +74,12 @@ def init_db() -> None:
         # lieu de relire les documents et de recalculer un résumé différent
         # à chaque clic.
         _ensure_column(conn, "cours", "ia_texte_source", "TEXT")
+        # Indice de fiabilité (0-100) obtenu en confrontant résumé/flashcards/
+        # quiz au texte source avec un second modèle — voir
+        # Services/ia_verification.py. Le détail par élément (quelle
+        # flashcard/question est en cause) reste dans le traitement
+        # 'ia_verification' (table `traitements`), pas dupliqué ici.
+        _ensure_column(conn, "cours", "ia_fiabilite", "INTEGER")
         # Détail des étapes internes d'un traitement (ex. pdftotext puis
         # bascule OCR page par page) — JSON, voir log_traitement ci-dessous.
         _ensure_column(conn, "traitements", "etapes", "TEXT")
@@ -120,6 +126,22 @@ def creer_traitement(conn: sqlite3.Connection, *, type: str, cible_type: str, ci
         """INSERT INTO traitements (type, cible_type, cible_id, statut, created_at)
            VALUES (?, ?, ?, 'en_cours', ?)""",
         (type, cible_type, cible_id, now_iso()),
+    )
+    return cur.lastrowid
+
+
+def creer_demande_regeneration(conn: sqlite3.Connection, cours_id: int) -> int:
+    """
+    Demande de régénération en attente de validation admin (voir écran
+    Traitements → onglet "En attente") — pas un vrai traitement en cours,
+    juste une ligne d'attente réutilisant la même table (mêmes colonnes,
+    même écran de suivi) : statut 'en_attente', complétée en 'validee' ou
+    'rejetee' par BackEnd/app/main.py, jamais par `log_traitement`.
+    """
+    cur = conn.execute(
+        """INSERT INTO traitements (type, cible_type, cible_id, statut, created_at)
+           VALUES ('regeneration_demande', 'cours', ?, 'en_attente', ?)""",
+        (cours_id, now_iso()),
     )
     return cur.lastrowid
 
