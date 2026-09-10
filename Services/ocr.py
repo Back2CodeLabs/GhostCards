@@ -58,16 +58,33 @@ def config_ocr(conn) -> dict:
 
 def extract_pdf_text(path: Path) -> str:
     """Texte natif d'un PDF via poppler-utils. Vide si le PDF est scanné (pas de couche de texte)."""
-    result = subprocess.run(
-        ["pdftotext", "-layout", str(path), "-"], capture_output=True, text=True, timeout=60,
-    )
+    try:
+        result = subprocess.run(
+            ["pdftotext", "-layout", str(path), "-"], capture_output=True, text=True, timeout=60,
+        )
+    except FileNotFoundError as e:
+        # Sans ça, l'erreur brute ("[Errno 2] No such file or directory:
+        # 'pdftotext'") remonte telle quelle dans le détail du traitement.
+        # Piège vécu : le paquet peut très bien être installé (poppler-utils)
+        # et l'erreur persister quand même si le PATH du service systemd est
+        # restreint au venv (voir BackEnd/deploy/ghostcards.service) — les
+        # binaires système comme pdftotext n'y sont alors pas visibles.
+        raise OcrError(
+            "pdftotext introuvable — vérifie qu'il est installé (paquet système "
+            "poppler-utils, `sudo apt install poppler-utils`) ET accessible depuis "
+            "l'environnement du service (le PATH de BackEnd/deploy/ghostcards.service "
+            "doit inclure /usr/bin en plus du venv)."
+        ) from e
     if result.returncode != 0:
         raise OcrError(f"pdftotext a échoué sur {path.name} : {result.stderr.strip()}")
     return result.stdout
 
 
 def count_pdf_pages(path: Path) -> int:
-    result = subprocess.run(["pdfinfo", str(path)], capture_output=True, text=True, timeout=30)
+    try:
+        result = subprocess.run(["pdfinfo", str(path)], capture_output=True, text=True, timeout=30)
+    except FileNotFoundError:
+        return 1  # pdftotext/pdfinfo introuvables : déjà signalé clairement par extract_pdf_text, appelé avant.
     if result.returncode == 0:
         for line in result.stdout.splitlines():
             if line.startswith("Pages:"):
@@ -90,10 +107,18 @@ def pdf_to_images(pdf_path: Path, out_dir: Path, max_pages: int = OCR_MAX_PAGES)
     """Convertit les pages d'un PDF en PNG (via poppler-utils), limité à max_pages."""
     out_dir.mkdir(parents=True, exist_ok=True)
     prefix = out_dir / "page"
-    result = subprocess.run(
-        ["pdftoppm", "-png", "-r", "150", "-l", str(max_pages), str(pdf_path), str(prefix)],
-        capture_output=True, text=True, timeout=180,
-    )
+    try:
+        result = subprocess.run(
+            ["pdftoppm", "-png", "-r", "150", "-l", str(max_pages), str(pdf_path), str(prefix)],
+            capture_output=True, text=True, timeout=180,
+        )
+    except FileNotFoundError as e:
+        raise OcrError(
+            "pdftoppm introuvable — vérifie qu'il est installé (paquet système "
+            "poppler-utils, `sudo apt install poppler-utils`) ET accessible depuis "
+            "l'environnement du service (le PATH de BackEnd/deploy/ghostcards.service "
+            "doit inclure /usr/bin en plus du venv)."
+        ) from e
     if result.returncode != 0:
         raise OcrError(f"pdftoppm a échoué sur {pdf_path.name} : {result.stderr.strip()}")
     return sorted(out_dir.glob("page-*.png"))

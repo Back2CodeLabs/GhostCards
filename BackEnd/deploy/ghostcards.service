@@ -7,7 +7,13 @@ Wants=network-online.target
 Type=simple
 User=cedric
 WorkingDirectory=/home/cedric/GhostCards/BackEnd
-Environment="PATH=/home/cedric/GhostCards/BackEnd/.venv/bin"
+# PATH restreint au venv UNIQUEMENT (sans /usr/bin etc.) : le service ne
+# trouvait plus les binaires système appelés en subprocess par l'OCR
+# (pdftotext/pdftoppm/pdfinfo, paquet poppler-utils) — pourtant bel et
+# bien installés — d'où "[Errno 2] No such file or directory: 'pdftotext'"
+# alors que `sudo apt install poppler-utils` le signalait déjà présent.
+# Le venv reste en tête pour que `python`/`uvicorn` du venv priment.
+Environment="PATH=/home/cedric/GhostCards/BackEnd/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 ExecStart=/home/cedric/GhostCards/BackEnd/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
 Restart=on-failure
 RestartSec=5

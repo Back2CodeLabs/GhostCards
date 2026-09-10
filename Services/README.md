@@ -101,6 +101,27 @@ choix se change à chaud depuis le sous-menu "OCR" de l'écran admin
 "Paramétrage" ; `OCR_ENGINE` dans `.env` (voir `Services/config.py`) ne
 sert que de valeur de départ.
 
+**Dépendance système requise, indépendamment du moteur OCR choisi** :
+`pdftotext`/`pdftoppm`/`pdfinfo` (paquet **poppler-utils**, PAS une
+dépendance Python — `pip install` ne l'installe pas). Tout PDF passe
+d'abord par `pdftotext` (texte natif) avant même de songer à
+PaddleOCR/Claude ; si ces binaires sont introuvables, chaque transcription
+échoue avec `[Errno 2] No such file or directory: 'pdftotext'` (visible
+dans le détail du traitement "transcription_document"), et un cours n'a
+alors que sa description Pronote comme source pour la génération IA.
+
+```bash
+sudo apt install poppler-utils
+```
+
+**Piège vécu** : cette erreur peut survenir même si le paquet est déjà
+installé, si le service systemd tourne avec un `PATH` restreint au venv
+(voir `Environment="PATH=..."` dans `BackEnd/deploy/ghostcards.service`)
+— les binaires système ne sont alors pas visibles depuis le service, même
+si `sudo apt install poppler-utils` répond "déjà la version la plus
+récente" en SSH. Vérifie que ce `PATH` inclut bien `/usr/bin` en plus du
+`.venv/bin`, pas seulement le venv seul.
+
 Chaque extraction/OCR est journalisée dans la table `traitements`, visible
 et relançable depuis l'écran "Traitements" du site (nav visible seulement
 en étant connecté en admin) — cet écran, comme "Paramétrage", est
