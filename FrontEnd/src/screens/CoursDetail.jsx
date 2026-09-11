@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { FileText, Download, LogIn, Paperclip, Sparkles, RefreshCw, Loader2, Ghost, GraduationCap, ShieldCheck, ChevronDown, ChevronUp, ExternalLink } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 import { API_BASE, useApi, messageErreur } from "../api";
-import { Loading, ApiError, ScreenHeader, AvertissementIA } from "../components/Shared";
+import { Loading, ApiError, ScreenHeader, AvertissementIA, IndicateursCours } from "../components/Shared";
 import { ExamMode } from "../components/ExamMode";
 import { disintegrate } from "../lib/disintegrate";
 
@@ -254,7 +254,16 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin, onOpenTraitem
         <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkSoft, margin: 0 }}>
           {new Date(c.date).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })} · {c.heure_debut}
           {c.professeur ? ` · ${c.professeur}` : ""}
+          {c.salle ? ` · ${c.salle}` : ""}
+          {c.groupe ? ` · ${c.groupe}` : ""}
         </p>
+        <IndicateursCours c={c} />
+
+        {c.memo && (
+          <div style={{ marginTop: 12, background: C.hauntSoft, borderRadius: 10, padding: "10px 14px" }}>
+            <p style={{ fontFamily: uiFont, fontSize: 13, color: C.ink, margin: 0, fontStyle: "italic" }}>{c.memo}</p>
+          </div>
+        )}
 
         {c.description && (
           <div style={{ marginTop: 16, background: C.white, border: `1px solid ${C.line}`, borderRadius: 12, padding: 16 }}>

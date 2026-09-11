@@ -88,6 +88,17 @@ def init_db() -> None:
         # (écran "Élèves") — l'admin y a toujours accès, lui, sans ce flag
         # (voir BackEnd/app/main.py::_peut_utiliser_assistant).
         _ensure_column(conn, "eleves", "assistant_actif", "INTEGER NOT NULL DEFAULT 0")
+        # Emploi du temps enrichi (voir Services/pronote_sync.py::_sync_lessons) :
+        # jusqu'ici seuls date/heure/professeur/titre/description étaient
+        # gardés, alors que Pronote renvoie bien plus par créneau.
+        _ensure_column(conn, "cours", "salle", "TEXT")
+        _ensure_column(conn, "cours", "groupe", "TEXT")
+        _ensure_column(conn, "cours", "memo", "TEXT")
+        # Motif d'annulation ("Classe absente"...) — `annule` (déjà existant)
+        # reste le booléen simple utilisé par le reste du code/frontend.
+        _ensure_column(conn, "cours", "statut", "TEXT")
+        _ensure_column(conn, "cours", "devoir_surveille", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "sync_log", "nouvelles_notes", "INTEGER DEFAULT 0")
         conn.commit()
 
 

@@ -259,8 +259,21 @@ def list_cours(matiere_id: int):
     with db.session() as conn:
         rows = conn.execute(
             f"""SELECT c.id, c.date, c.heure_debut, c.heure_fin, c.professeur, c.titre,
-                       c.contenu_recupere, c.ia_statut, {_COMPTES_COURS_SQL}
+                       c.contenu_recupere, c.ia_statut, c.annule, c.statut, c.salle, c.groupe,
+                       c.memo, c.devoir_surveille, {_COMPTES_COURS_SQL}
                 FROM cours c WHERE c.matiere_id = ? ORDER BY c.date DESC, c.heure_debut DESC""",
+            (matiere_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.get("/api/matieres/{matiere_id}/notes")
+def list_notes_matiere(matiere_id: int):
+    with db.session() as conn:
+        rows = conn.execute(
+            """SELECT id, valeur, bareme, moyenne_classe, note_min, note_max, coefficient,
+                      commentaire, date
+               FROM notes_pronote WHERE matiere_id = ? ORDER BY date DESC""",
             (matiere_id,),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -270,7 +283,8 @@ def list_cours(matiere_id: int):
 def recent_cours(limit: int = 8):
     with db.session() as conn:
         rows = conn.execute(
-            f"""SELECT c.id, c.date, c.heure_debut, c.titre, c.ia_statut, m.nom AS matiere, m.id AS matiere_id,
+            f"""SELECT c.id, c.date, c.heure_debut, c.titre, c.ia_statut, c.annule, c.salle,
+                       c.devoir_surveille, m.nom AS matiere, m.id AS matiere_id,
                        {_COMPTES_COURS_SQL}
                 FROM cours c JOIN matieres m ON m.id = c.matiere_id
                 WHERE c.annule = 0
@@ -623,6 +637,9 @@ def get_parametres(request: Request):
         "pronote_url": pronote_cfg["pronote_url"],
         "sync_days_back": pronote_cfg["sync_days_back"],
         "sync_days_forward": pronote_cfg["sync_days_forward"],
+        "matieres_exclues": db.get_parametre(
+            conn, "matieres_exclues", "Réunion parents-profs, Journée du sport scolaire"
+        ),
         "pronote_jeton_present": CREDENTIALS_PATH.exists(),
         "ocr_engine": ocr_cfg["moteur"],
         # Vérification (Services/ia_verification.py) : moteur indépendant de
@@ -666,6 +683,7 @@ class ParametresIA(BaseModel):
     pronote_url: str | None = None
     sync_days_back: int | None = None
     sync_days_forward: int | None = None
+    matieres_exclues: str | None = None
     ocr_engine: str | None = None
     verif_moteur: str | None = None
     verif_ollama_url: str | None = None
@@ -714,6 +732,8 @@ def set_parametres(payload: ParametresIA, request: Request):
             db.set_parametre(conn, "sync_days_back", str(payload.sync_days_back))
         if payload.sync_days_forward is not None:
             db.set_parametre(conn, "sync_days_forward", str(payload.sync_days_forward))
+        if payload.matieres_exclues is not None:
+            db.set_parametre(conn, "matieres_exclues", payload.matieres_exclues)
         if payload.ocr_engine:
             db.set_parametre(conn, "ocr_engine", payload.ocr_engine)
         if payload.verif_moteur:

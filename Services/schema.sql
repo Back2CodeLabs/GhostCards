@@ -32,6 +32,26 @@ CREATE TABLE IF NOT EXISTS cours (
 CREATE INDEX IF NOT EXISTS idx_cours_matiere ON cours(matiere_id);
 CREATE INDEX IF NOT EXISTS idx_cours_date ON cours(date);
 
+-- Notes Pronote (grades) — distinct de `notes_eleves` (prises de notes
+-- perso des élèves) : ici, ce que Pronote publie comme note/moyenne.
+CREATE TABLE IF NOT EXISTS notes_pronote (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- Comme pour cours/devoirs : grade.id est réattribué par Pronote à
+    -- chaque connexion, clé stable calculée nous-mêmes (voir pronote_sync.py).
+    external_key    TEXT NOT NULL UNIQUE,
+    matiere_id      INTEGER NOT NULL REFERENCES matieres(id),
+    valeur          TEXT,      -- note obtenue (chaîne : Pronote renvoie parfois "Absent", "Disp.", etc.)
+    bareme          TEXT,      -- note sur combien (ex. "20")
+    moyenne_classe  TEXT,
+    note_min        TEXT,
+    note_max        TEXT,
+    coefficient     TEXT,
+    commentaire     TEXT,
+    date            TEXT NOT NULL,
+    created_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notes_pronote_matiere ON notes_pronote(matiere_id);
+
 CREATE TABLE IF NOT EXISTS devoirs (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     external_key  TEXT NOT NULL UNIQUE,
@@ -112,5 +132,6 @@ CREATE TABLE IF NOT EXISTS sync_log (
     nouveaux_cours      INTEGER DEFAULT 0,
     nouveaux_devoirs    INTEGER DEFAULT 0,
     nouveaux_documents  INTEGER DEFAULT 0,
+    nouvelles_notes     INTEGER DEFAULT 0,
     erreur              TEXT
 );

@@ -17,8 +17,15 @@ Points d'attention (issus du fonctionnement réel de Pronote / pronotepy) :
 - Le jeton de connexion (`credentials.json`) est à usage unique : on doit
   IMPÉRATIVEMENT le régénérer et le réenregistrer après chaque connexion,
   sinon la connexion suivante échoue.
-- Certains créneaux (sorties pédagogiques, cours annulés) n'ont pas de
-  matière exploitable : on les ignore proprement plutôt que de planter.
+- Certains créneaux (sorties pédagogiques) n'ont pas de matière exploitable :
+  on les ignore proprement plutôt que de planter. Les cours annulés, eux,
+  sont conservés (avec leur motif) plutôt qu'ignorés — voir `_sync_lessons`.
+- Certains établissements utilisent Pronote pour des créneaux qui ne sont
+  pas de vraies matières (réunions parents-profs, journées spéciales...) :
+  liste éditable (`matieres_exclues`, écran admin Paramétrage) plutôt que
+  détectée automatiquement, ces libellés étant propres à chaque établissement.
+- Les notes (`client.current_period.grades`) ne se récupèrent que période
+  par période, pas sur une fenêtre de dates comme cours/devoirs.
 """
 import hashlib
 import json
@@ -91,10 +98,21 @@ def config_pronote(conn) -> dict:
         except ValueError:
             return defaut
 
+    matieres_exclues_brut = db.get_parametre(
+        conn, "matieres_exclues", "Réunion parents-profs, Journée du sport scolaire"
+    ) or ""
     return {
         "pronote_url": db.get_parametre(conn, "pronote_url", PRONOTE_URL) or PRONOTE_URL,
         "sync_days_back": _int_parametre("sync_days_back", SYNC_DAYS_BACK),
         "sync_days_forward": _int_parametre("sync_days_forward", SYNC_DAYS_FORWARD),
+        # Certains créneaux Pronote ne sont pas de vraies matières (réunions,
+        # journées spéciales...) : chaque établissement les nomme à sa
+        # façon, impossible à deviner automatiquement — liste éditable
+        # depuis l'écran admin Paramétrage. Comparaison par slug (voir
+        # `_slugify`) pour ignorer accents/casse/espaces.
+        "matieres_exclues_slugs": {
+            _slugify(nom) for nom in matieres_exclues_brut.split(",") if nom.strip()
+        },
     }
 
 
@@ -241,11 +259,11 @@ def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
     db.init_db()
     started_at = _now()
     counters = {
-        "nouveaux_cours": 0, "nouveaux_devoirs": 0, "nouveaux_documents": 0,
+        "nouveaux_cours": 0, "nouveaux_devoirs": 0, "nouveaux_documents": 0, "nouvelles_notes": 0,
         # Détail lisible de chaque nouveauté (pas juste le compteur) — voir
-        # `_sync_lessons`/`_sync_homework`, affiché dans le RÉSULTAT du
-        # traitement pour savoir précisément ce qui a été importé.
-        "detail_cours": [], "detail_devoirs": [],
+        # `_sync_lessons`/`_sync_homework`/`_sync_grades`, affiché dans le
+        # RÉSULTAT du traitement pour savoir précisément ce qui a été importé.
+        "detail_cours": [], "detail_devoirs": [], "detail_notes": [],
     }
     erreur = None
     with db.session() as conn:
@@ -265,7 +283,7 @@ def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
 
             t1 = time.monotonic()
             with db.session() as conn:
-                _sync_lessons(conn, client, date_from, date_to, fetch_content, counters, documents_a_transcrire)
+                _sync_lessons(conn, client, date_from, date_to, fetch_content, counters, documents_a_transcrire, cfg["matieres_exclues_slugs"])
             ctx.etape(
                 "cours",
                 detail=f"{counters['nouveaux_cours']} nouveau(x) cours, {counters['nouveaux_documents']} document(s) téléchargé(s)",
@@ -274,8 +292,20 @@ def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
 
             t2 = time.monotonic()
             with db.session() as conn:
-                _sync_homework(conn, client, date_from, date_to, counters, documents_a_transcrire)
+                _sync_homework(conn, client, date_from, date_to, counters, documents_a_transcrire, cfg["matieres_exclues_slugs"])
             ctx.etape("devoirs", detail=f"{counters['nouveaux_devoirs']} nouveau(x) devoir(s)", duree_ms=int((time.monotonic() - t2) * 1000))
+
+            t4 = time.monotonic()
+            try:
+                with db.session() as conn:
+                    _sync_grades(conn, client, counters, cfg["matieres_exclues_slugs"])
+                ctx.etape("notes", detail=f"{counters['nouvelles_notes']} nouvelle(s) note(s)", duree_ms=int((time.monotonic() - t4) * 1000))
+            except SyncError as e:
+                # Les notes sont secondaires par rapport aux cours/devoirs :
+                # une période Pronote mal configurée (ex. pas encore de
+                # trimestre en cours) ne doit pas faire échouer toute la
+                # synchronisation, seulement cette étape.
+                ctx.etape("notes", detail=f"échec : {e}", duree_ms=int((time.monotonic() - t4) * 1000))
 
             if documents_a_transcrire:
                 t3 = time.monotonic()
@@ -300,9 +330,9 @@ def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
     finally:
         with db.session() as conn:
             conn.execute(
-                """INSERT INTO sync_log (started_at, finished_at, nouveaux_cours, nouveaux_devoirs, nouveaux_documents, erreur)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (started_at, _now(), counters["nouveaux_cours"], counters["nouveaux_devoirs"], counters["nouveaux_documents"], erreur),
+                """INSERT INTO sync_log (started_at, finished_at, nouveaux_cours, nouveaux_devoirs, nouveaux_documents, nouvelles_notes, erreur)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (started_at, _now(), counters["nouveaux_cours"], counters["nouveaux_devoirs"], counters["nouveaux_documents"], counters["nouvelles_notes"], erreur),
             )
 
     if erreur:
@@ -310,7 +340,7 @@ def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
     return counters
 
 
-def _sync_lessons(conn, client, date_from, date_to, fetch_content, counters, documents_a_transcrire):
+def _sync_lessons(conn, client, date_from, date_to, fetch_content, counters, documents_a_transcrire, matieres_exclues_slugs):
     try:
         lessons = client.lessons(date_from, date_to)
     except requests.exceptions.RequestException as e:
@@ -318,16 +348,30 @@ def _sync_lessons(conn, client, date_from, date_to, fetch_content, counters, doc
     log.info("Pronote : %d créneaux reçus entre %s et %s", len(lessons), date_from, date_to)
 
     for lesson in lessons:
-        if getattr(lesson, "canceled", False):
-            continue
         subject = getattr(lesson, "subject", None)
         if subject is None:
             # sortie pédagogique ou créneau sans matière exploitable
+            continue
+        if _slugify(subject.name) in matieres_exclues_slugs:
+            # pas une vraie matière (réunion, journée spéciale...) — voir
+            # config_pronote() / écran admin Paramétrage.
             continue
 
         matiere_id = db.upsert_matiere(conn, subject.name)
         teacher = getattr(lesson, "teacher_name", "") or ""
         key = _stable_key(lesson.start.isoformat(), subject.name, teacher)
+
+        # Emploi du temps enrichi : ces champs peuvent changer d'une synchro
+        # à l'autre (annulation décidée après coup, salle réattribuée) même
+        # pour un cours déjà connu — recalculés et réenregistrés à chaque
+        # passage, contrairement au contenu (titre/description), coûteux à
+        # rapatrier et rapatrié une seule fois (voir plus bas).
+        annule = int(bool(getattr(lesson, "canceled", False)))
+        statut = getattr(lesson, "status", None) if annule else None
+        salle = ", ".join(getattr(lesson, "classrooms", None) or []) or None
+        groupe = ", ".join(getattr(lesson, "group_names", None) or []) or None
+        memo = getattr(lesson, "memo", None)
+        devoir_surveille = int(bool(getattr(lesson, "test", False)))
 
         row = conn.execute(
             "SELECT id, contenu_recupere FROM cours WHERE external_key = ?", (key,)
@@ -337,13 +381,15 @@ def _sync_lessons(conn, client, date_from, date_to, fetch_content, counters, doc
             cur = conn.execute(
                 """INSERT INTO cours
                    (external_key, matiere_id, date, heure_debut, heure_fin, professeur,
-                    titre, description, annule, contenu_recupere, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)""",
+                    titre, description, annule, statut, salle, groupe, memo, devoir_surveille,
+                    contenu_recupere, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)""",
                 (
                     key, matiere_id,
                     lesson.start.date().isoformat(), lesson.start.strftime("%H:%M"),
                     lesson.end.strftime("%H:%M") if getattr(lesson, "end", None) else None,
-                    teacher, None, None, _now(), _now(),
+                    teacher, None, None, annule, statut, salle, groupe, memo, devoir_surveille,
+                    _now(), _now(),
                 ),
             )
             cours_id = cur.lastrowid
@@ -352,10 +398,17 @@ def _sync_lessons(conn, client, date_from, date_to, fetch_content, counters, doc
             ligne = f"{subject.name} — {lesson.start.strftime('%d/%m %H:%M')}"
             if teacher:
                 ligne += f" ({teacher})"
+            if annule:
+                ligne += " [annulé]"
             counters["detail_cours"].append(ligne)
         else:
             cours_id = row["id"]
             already_fetched = bool(row["contenu_recupere"])
+            conn.execute(
+                """UPDATE cours SET annule = ?, statut = ?, salle = ?, groupe = ?, memo = ?,
+                   devoir_surveille = ?, updated_at = ? WHERE id = ?""",
+                (annule, statut, salle, groupe, memo, devoir_surveille, _now(), cours_id),
+            )
 
         if fetch_content and not already_fetched:
             _fetch_lesson_content(conn, client, lesson, cours_id, subject.name, counters, documents_a_transcrire)
@@ -389,7 +442,7 @@ def _fetch_lesson_content(conn, client, lesson, cours_id, subject_name, counters
         documents_a_transcrire.append(document_id)
 
 
-def _sync_homework(conn, client, date_from, date_to, counters, documents_a_transcrire):
+def _sync_homework(conn, client, date_from, date_to, counters, documents_a_transcrire, matieres_exclues_slugs):
     try:
         homeworks = client.homework(date_from, date_to)
     except requests.exceptions.RequestException as e:
@@ -399,6 +452,8 @@ def _sync_homework(conn, client, date_from, date_to, counters, documents_a_trans
     for hw in homeworks:
         subject = getattr(hw, "subject", None)
         if subject is None:
+            continue
+        if _slugify(subject.name) in matieres_exclues_slugs:
             continue
 
         matiere_id = db.upsert_matiere(conn, subject.name)
@@ -430,6 +485,51 @@ def _sync_homework(conn, client, date_from, date_to, counters, documents_a_trans
             )
             counters["nouveaux_documents"] += 1
             documents_a_transcrire.append(document_id)
+
+
+def _sync_grades(conn, client, counters, matieres_exclues_slugs):
+    """
+    Notes du trimestre/semestre en cours uniquement (`client.current_period`)
+    — Pronote ne permet pas de les interroger sur une fenêtre de dates comme
+    les cours/devoirs, seulement période par période. Comme pour les cours,
+    grade.id est réattribué à chaque connexion : clé stable calculée nous-mêmes.
+    """
+    try:
+        grades = client.current_period.grades
+    except requests.exceptions.RequestException as e:
+        raise SyncError("Connexion à Pronote perdue pendant la synchronisation — réessaie plus tard.") from e
+    log.info("Pronote : %d note(s) reçue(s) pour la période en cours", len(grades))
+
+    for g in grades:
+        subject = getattr(g, "subject", None)
+        if subject is None:
+            continue
+        if _slugify(subject.name) in matieres_exclues_slugs:
+            continue
+
+        matiere_id = db.upsert_matiere(conn, subject.name)
+        commentaire = g.comment or ""
+        key = _stable_key(g.date.isoformat(), subject.name, str(g.grade), commentaire[:60])
+
+        row = conn.execute("SELECT id FROM notes_pronote WHERE external_key = ?", (key,)).fetchone()
+        if row is not None:
+            continue  # une note publiée ne change plus ensuite : pas la peine de la réécrire
+
+        conn.execute(
+            """INSERT INTO notes_pronote
+               (external_key, matiere_id, valeur, bareme, moyenne_classe, note_min, note_max,
+                coefficient, commentaire, date, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                key, matiere_id, g.grade, g.out_of, g.average, g.min, g.max,
+                g.coefficient, commentaire, g.date.isoformat(), _now(),
+            ),
+        )
+        counters["nouvelles_notes"] += 1
+        ligne = f"{subject.name} — {g.grade}/{g.out_of}"
+        if commentaire:
+            ligne += f" ({commentaire[:60]})"
+        counters["detail_notes"].append(ligne)
 
 
 if __name__ == "__main__":

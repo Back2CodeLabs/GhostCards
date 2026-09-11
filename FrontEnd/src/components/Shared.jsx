@@ -1,4 +1,4 @@
-import { ArrowLeft, Ghost, RefreshCw, WifiOff, Sparkles, FileText, TriangleAlert, ScrollText, Clock, ShieldCheck, MessageSquare } from "lucide-react";
+import { ArrowLeft, Ghost, RefreshCw, WifiOff, Sparkles, FileText, TriangleAlert, ScrollText, Clock, ShieldCheck, MessageSquare, MapPin, Ban } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 
 /* ------------------------------------------------------------------ */
@@ -82,14 +82,17 @@ export function Divider() {
 export function IndicateursCours({ c }) {
   const { C } = useTheme();
   const items = [];
+  if (c.annule) items.push({ key: "annule", Icon: Ban, label: c.statut || "Annulé", title: c.statut || "Cours annulé", color: C.brick });
+  if (c.devoir_surveille) items.push({ key: "ds", Icon: TriangleAlert, label: "Devoir surveillé", title: "Devoir surveillé", color: C.brick });
+  if (c.salle) items.push({ key: "salle", Icon: MapPin, label: c.salle, title: `Salle ${c.salle}` });
   if (c.nb_documents > 0) items.push({ key: "documents", Icon: FileText, label: c.nb_documents, title: `${c.nb_documents} document(s)` });
   if (c.nb_notes > 0) items.push({ key: "notes", Icon: MessageSquare, label: c.nb_notes, title: `${c.nb_notes} note(s) d'élève` });
   if (c.ia_statut === "pret") items.push({ key: "ia", Icon: Sparkles, label: null, title: "Résumé/flashcards/quiz générés" });
   if (items.length === 0) return null;
   return (
-    <div className="flex items-center gap-2" style={{ marginTop: 4 }}>
-      {items.map(({ key, Icon, label, title }) => (
-        <span key={key} title={title} style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, color: C.inkFaint }}>
+    <div className="flex items-center gap-2" style={{ marginTop: 4, flexWrap: "wrap" }}>
+      {items.map(({ key, Icon, label, title, color }) => (
+        <span key={key} title={title} style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, color: color || C.inkFaint }}>
           <Icon size={12} />
           {label != null && label}
         </span>

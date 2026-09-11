@@ -49,11 +49,31 @@ export function SubjectsScreen({ onOpenSubject }) {
 export function SubjectDetail({ subjectId, subjectName, onBack, onOpenCours }) {
   const { C, colorFor } = useTheme();
   const cours = useApi(`/api/matieres/${subjectId}/cours`, [subjectId]);
+  const notes = useApi(`/api/matieres/${subjectId}/notes`, [subjectId]);
   const { color } = colorFor(subjectId);
 
   return (
     <div>
       <ScreenHeader title={subjectName} onBack={onBack} />
+      {notes.data && notes.data.length > 0 && (
+        <div style={{ padding: "0 20px 4px" }}>
+          <div style={{ background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+            <span style={{ fontFamily: uiFont, fontSize: 11.5, fontWeight: 700, color: C.inkFaint, letterSpacing: 0.3 }}>NOTES</span>
+            {notes.data.map((n) => (
+              <div key={n.id} className="flex items-center justify-between" style={{ fontFamily: uiFont, fontSize: 13, color: C.ink }}>
+                <span>
+                  {n.commentaire || new Date(n.date).toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}
+                  {n.coefficient && n.coefficient !== "0" && n.coefficient !== "1" ? ` · coef. ${n.coefficient}` : ""}
+                </span>
+                <span style={{ fontWeight: 700, color: C.haunt }}>
+                  {n.valeur}/{n.bareme}
+                  {n.moyenne_classe ? <span style={{ fontWeight: 400, color: C.inkFaint }}> · classe {n.moyenne_classe}</span> : null}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div style={{ padding: "16px 20px" }} className="gc-grid">
         {cours.loading && <Loading />}
         {cours.error && <ApiError message={cours.error} onRetry={cours.reload} />}
@@ -73,6 +93,7 @@ export function SubjectDetail({ subjectId, subjectName, onBack, onOpenCours }) {
             <div style={{ fontSize: 12, color: C.inkSoft, marginTop: 3 }}>
               {new Date(c.date).toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", month: "short" })} · {c.heure_debut}
               {c.professeur ? ` · ${c.professeur}` : ""}
+              {c.groupe ? ` · ${c.groupe}` : ""}
             </div>
             <IndicateursCours c={c} />
           </button>

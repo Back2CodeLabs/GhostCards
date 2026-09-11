@@ -84,6 +84,7 @@ export function ParametresScreen() {
   const [pronoteUrl, setPronoteUrl] = useState("");
   const [syncDaysBack, setSyncDaysBack] = useState("");
   const [syncDaysForward, setSyncDaysForward] = useState("");
+  const [matieresExclues, setMatieresExclues] = useState("");
   const [ocrEngine, setOcrEngine] = useState("paddleocr");
   const [verifMoteur, setVerifMoteur] = useState("claude");
   const [verifOllamaUrl, setVerifOllamaUrl] = useState("");
@@ -109,6 +110,7 @@ export function ParametresScreen() {
       setPronoteUrl(parametres.data.pronote_url || "");
       setSyncDaysBack(String(parametres.data.sync_days_back ?? ""));
       setSyncDaysForward(String(parametres.data.sync_days_forward ?? ""));
+      setMatieresExclues(parametres.data.matieres_exclues || "");
       setOcrEngine(parametres.data.ocr_engine || "paddleocr");
       setVerifMoteur(parametres.data.verif_moteur || "claude");
       setVerifOllamaUrl(parametres.data.verif_ollama_url || "");
@@ -165,6 +167,7 @@ export function ParametresScreen() {
         pronote_url: pronoteUrl.trim() || null,
         sync_days_back: syncDaysBack.trim() ? parseInt(syncDaysBack, 10) : null,
         sync_days_forward: syncDaysForward.trim() ? parseInt(syncDaysForward, 10) : null,
+        matieres_exclues: matieresExclues,
         ocr_engine: ocrEngine,
         verif_moteur: verifMoteur,
         verif_ollama_url: verifOllamaUrl.trim() || null,
@@ -254,7 +257,7 @@ export function ParametresScreen() {
                   </div>
                   <p style={{ fontFamily: uiFont, fontSize: 12, color: C.inkSoft, margin: "4px 0 0" }}>
                     {formatDateHeure(derniereSync.data.finished_at || derniereSync.data.started_at)}
-                    {!derniereSync.data.erreur && ` · ${derniereSync.data.nouveaux_cours} cours, ${derniereSync.data.nouveaux_devoirs} devoirs, ${derniereSync.data.nouveaux_documents} documents`}
+                    {!derniereSync.data.erreur && ` · ${derniereSync.data.nouveaux_cours} cours, ${derniereSync.data.nouveaux_devoirs} devoirs, ${derniereSync.data.nouveaux_documents} documents, ${derniereSync.data.nouvelles_notes ?? 0} notes`}
                   </p>
                   {derniereSync.data.erreur && (
                     <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "4px 0 0" }}>{derniereSync.data.erreur}</p>
@@ -285,6 +288,20 @@ export function ParametresScreen() {
               <p style={{ fontFamily: uiFont, fontSize: 11.5, color: C.inkFaint, margin: 0 }}>
                 Fenêtre récupérée à chaque synchronisation autour d'aujourd'hui (ex. 3 jours en arrière, 10 en avant).
               </p>
+              <div>
+                <label style={labelStyle}>MATIÈRES À EXCLURE</label>
+                <input
+                  value={matieresExclues}
+                  onChange={(e) => setMatieresExclues(e.target.value)}
+                  placeholder="Réunion parents-profs, Journée du sport scolaire"
+                  style={inputStyle}
+                />
+                <p style={{ fontFamily: uiFont, fontSize: 11.5, color: C.inkFaint, margin: "4px 0 0" }}>
+                  Noms séparés par des virgules, tels qu'affichés dans Pronote (accents/majuscules sans
+                  importance). Certains créneaux ne sont pas de vraies matières (réunions, journées
+                  spéciales...) — ceux listés ici ne seront plus importés à la prochaine synchronisation.
+                </p>
+              </div>
             </div>
           </div>
         )}
