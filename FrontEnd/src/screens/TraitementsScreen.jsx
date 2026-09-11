@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { ChevronRight, ListChecks, CheckCircle2, XCircle, Loader2, Sparkles, RotateCcw, RefreshCw, FileText, Clock, Check, X, ShieldCheck } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
-import { API_BASE, useApi } from "../api";
+import { API_BASE, useApi, messageErreur } from "../api";
 import { Loading, ApiError, EmptyState, ScreenHeader, SousMenu, SOUS_MENU_EN_ATTENTE } from "../components/Shared";
 import { ResultatFormatte } from "../components/ResultatFormatte";
 
@@ -135,7 +135,7 @@ export function TraitementsScreen({ onOpenTraitement }) {
       }
       traitements.reload();
     } catch (e) {
-      setActionError(e.message || "Impossible de traiter cette demande.");
+      setActionError(messageErreur(e, "Impossible de traiter cette demande."));
     } finally {
       setActingId(null);
     }
@@ -155,7 +155,7 @@ export function TraitementsScreen({ onOpenTraitement }) {
       if (data.traitement_id) onOpenTraitement(data.traitement_id);
       else traitements.reload();
     } catch (e) {
-      setSyncError(e.message || "Impossible de lancer la synchronisation.");
+      setSyncError(messageErreur(e, "Impossible de lancer la synchronisation."));
     } finally {
       setSyncing(false);
     }
@@ -286,7 +286,7 @@ export function TraitementDetail({ traitementId, onBack, onOpenCours }) {
       }
       setRelanceMsg("Relance lancée en arrière-plan — un nouveau traitement apparaîtra dans la liste dans quelques secondes.");
     } catch (e) {
-      setRelanceMsg(e.message || "Impossible de relancer ce traitement.");
+      setRelanceMsg(messageErreur(e, "Impossible de relancer ce traitement."));
     } finally {
       setRelancing(false);
     }

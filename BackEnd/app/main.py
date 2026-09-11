@@ -243,12 +243,24 @@ def list_matieres():
         return [dict(r) for r in rows]
 
 
+
+# Sous-requêtes réutilisées par les deux listes de cours ci-dessous : de
+# quoi afficher un petit indicateur (documents/notes/génération IA) sans
+# avoir à ouvrir chaque cours pour le savoir — masqué côté frontend quand
+# le compte est à 0, pas la peine d'encombrer la liste.
+_COMPTES_COURS_SQL = """
+    (SELECT COUNT(*) FROM documents d WHERE d.cours_id = c.id) AS nb_documents,
+    (SELECT COUNT(*) FROM notes_eleves n WHERE n.cours_id = c.id) AS nb_notes
+"""
+
+
 @app.get("/api/matieres/{matiere_id}/cours")
 def list_cours(matiere_id: int):
     with db.session() as conn:
         rows = conn.execute(
-            """SELECT id, date, heure_debut, heure_fin, professeur, titre, contenu_recupere
-               FROM cours WHERE matiere_id = ? ORDER BY date DESC, heure_debut DESC""",
+            f"""SELECT c.id, c.date, c.heure_debut, c.heure_fin, c.professeur, c.titre,
+                       c.contenu_recupere, c.ia_statut, {_COMPTES_COURS_SQL}
+                FROM cours c WHERE c.matiere_id = ? ORDER BY c.date DESC, c.heure_debut DESC""",
             (matiere_id,),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -258,10 +270,11 @@ def list_cours(matiere_id: int):
 def recent_cours(limit: int = 8):
     with db.session() as conn:
         rows = conn.execute(
-            """SELECT c.id, c.date, c.heure_debut, c.titre, m.nom AS matiere, m.id AS matiere_id
-               FROM cours c JOIN matieres m ON m.id = c.matiere_id
-               WHERE c.annule = 0
-               ORDER BY c.created_at DESC LIMIT ?""",
+            f"""SELECT c.id, c.date, c.heure_debut, c.titre, c.ia_statut, m.nom AS matiere, m.id AS matiere_id,
+                       {_COMPTES_COURS_SQL}
+                FROM cours c JOIN matieres m ON m.id = c.matiere_id
+                WHERE c.annule = 0
+                ORDER BY c.created_at DESC LIMIT ?""",
             (limit,),
         ).fetchall()
         return [dict(r) for r in rows]

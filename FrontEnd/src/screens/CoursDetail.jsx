@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { FileText, Download, LogIn, Paperclip, Sparkles, RefreshCw, Loader2, Ghost, GraduationCap, ShieldCheck } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
-import { API_BASE, useApi } from "../api";
+import { API_BASE, useApi, messageErreur } from "../api";
 import { Loading, ApiError, ScreenHeader, AvertissementIA } from "../components/Shared";
 import { ExamMode } from "../components/ExamMode";
 
@@ -104,7 +104,7 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin, onOpenTraitem
       }
       cours.reload();
     } catch (e) {
-      setGenerationError(e.message || "Impossible de lancer la génération.");
+      setGenerationError(messageErreur(e, "Impossible de lancer la génération."));
     } finally {
       setGenerating(false);
     }
@@ -127,7 +127,7 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin, onOpenTraitem
       // sur cette page à attendre.
       if (data.traitement_id) onOpenTraitement(data.traitement_id);
     } catch (e) {
-      setVerifyError(e.message || "Impossible de lancer la vérification.");
+      setVerifyError(messageErreur(e, "Impossible de lancer la vérification."));
     } finally {
       setVerifying(false);
     }
@@ -145,7 +145,7 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin, onOpenTraitem
       }
       cours.reload();
     } catch (e) {
-      setCompletingError(e.message || "Impossible de lancer le complément.");
+      setCompletingError(messageErreur(e, "Impossible de lancer le complément."));
     } finally {
       setCompleting(false);
     }
@@ -169,7 +169,7 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin, onOpenTraitem
       setNoteText("");
       cours.reload();
     } catch (e) {
-      setNoteError(e.message || "Impossible d'enregistrer la note.");
+      setNoteError(messageErreur(e, "Impossible d'enregistrer la note."));
     } finally {
       setPosting(false);
     }
@@ -189,7 +189,7 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin, onOpenTraitem
       }
       cours.reload();
     } catch (e) {
-      setUploadError(e.message || "Impossible d'envoyer le fichier.");
+      setUploadError(messageErreur(e, "Impossible d'envoyer le fichier."));
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";

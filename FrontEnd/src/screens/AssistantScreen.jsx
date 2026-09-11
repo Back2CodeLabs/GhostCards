@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Sparkles, Ghost, LogIn, Send } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
-import { API_BASE } from "../api";
+import { API_BASE, messageErreur } from "../api";
 import { Loading } from "../components/Shared";
 
 /* ------------------------------------------------------------------ */
@@ -45,7 +45,7 @@ export function AssistantScreen({ me, onRequireLogin }) {
       const data = await response.json();
       setMessages((m) => [...m, { role: "assistant", text: data.text }]);
     } catch (e) {
-      setError(e.message || "La connexion à l'assistant a échoué. Réessaie dans un instant.");
+      setError(messageErreur(e, "La connexion à l'assistant a échoué. Réessaie dans un instant."));
     } finally {
       setLoading(false);
     }

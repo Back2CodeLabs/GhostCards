@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Ghost, LogIn, ShieldCheck } from "lucide-react";
 import { useTheme, uiFont, glowText } from "../theme";
-import { API_BASE } from "../api";
+import { API_BASE, messageErreur } from "../api";
 import { ScreenHeader } from "../components/Shared";
 
 /* ------------------------------------------------------------------ */
@@ -54,7 +54,7 @@ export function AdminLoginScreen({ onBack, me }) {
       await me.adminLogin(password);
       onBack();
     } catch (e) {
-      setError(e.message || "Connexion admin impossible.");
+      setError(messageErreur(e, "Connexion admin impossible."));
     } finally {
       setSubmitting(false);
     }

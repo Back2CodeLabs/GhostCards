@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { RefreshCw, CheckCircle2, XCircle } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
-import { API_BASE, useApi } from "../api";
+import { API_BASE, useApi, messageErreur } from "../api";
 import { Loading, ApiError, SousMenu, SOUS_MENU_PROMPTS, SOUS_MENU_VERIFICATION } from "../components/Shared";
 
 /* ------------------------------------------------------------------ */
@@ -134,7 +134,7 @@ export function ParametresScreen() {
       if (data.modeles?.length === 0) setError("Aucun modèle installé sur ce serveur Ollama.");
     } catch (e) {
       setModeles([]);
-      setError(e.message || "Impossible de récupérer la liste des modèles.");
+      setError(messageErreur(e, "Impossible de récupérer la liste des modèles."));
     } finally {
       setLoading(false);
     }
@@ -187,7 +187,7 @@ export function ParametresScreen() {
       setSaveOk(true);
       parametres.reload();
     } catch (e) {
-      setSaveError(e.message || "Impossible d'enregistrer.");
+      setSaveError(messageErreur(e, "Impossible d'enregistrer."));
     } finally {
       setSaving(false);
     }

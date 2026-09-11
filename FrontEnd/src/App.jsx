@@ -104,7 +104,22 @@ export default function App() {
             <div className="flex items-center gap-2">
               <Ghost className="gc-brand-icon" size={16} color={C.haunt} style={glowText(C, C.haunt, 0.5)} />
               <span className="gc-brand-text" style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 14, color: C.haunt, ...glowText(C, C.haunt, 0.35) }}>
-                Ghost School
+                {/* "Ghost" à moitié effacé comme le mot le suggère : G et o
+                    pleinement visibles, h/s/t estompés à des degrés
+                    différents (pas invisibles — juste fantomatiques,
+                    comme si chaque lettre s'effaçait à son propre rythme)
+                    pour qu'on lise presque "G o" d'un coup d'œil tout en
+                    gardant "Ghost" lisible de près. */}
+                {[
+                  { lettre: "G", opacite: 1 },
+                  { lettre: "h", opacite: 0.45 },
+                  { lettre: "o", opacite: 1 },
+                  { lettre: "s", opacite: 0.28 },
+                  { lettre: "t", opacite: 0.14 },
+                ].map(({ lettre, opacite }, i) => (
+                  <span key={i} style={opacite < 1 ? { opacity: opacite } : undefined}>{lettre}</span>
+                ))}
+                {" School"}
               </span>
             </div>
             <div className="flex items-center gap-2">

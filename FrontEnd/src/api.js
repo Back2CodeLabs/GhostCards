@@ -16,6 +16,24 @@ export async function apiGet(path) {
   return res.json();
 }
 
+// Le navigateur lève une TypeError avec son propre message quand la requête
+// n'atteint même pas le serveur (coupure internet, serveur injoignable) —
+// "NetworkError when attempting to fetch resource." sur Firefox, "Failed to
+// fetch" sur Chrome/Edge, "Load failed" sur Safari : trois formulations
+// techniques en anglais pour la même situation, incompréhensibles pour un
+// élève ou un parent. `messageErreur` les remplace par un message clair ;
+// une vraie erreur applicative (ex. "Cette adresse n'est pas autorisée...")
+// passe telle quelle.
+const MESSAGES_RESEAU_BRUTS = /networkerror|failed to fetch|load failed/i;
+
+export function messageErreur(e, secours = "Une erreur est survenue.") {
+  const brut = e?.message || "";
+  if (MESSAGES_RESEAU_BRUTS.test(brut)) {
+    return "Impossible de joindre le serveur — vérifie ta connexion internet.";
+  }
+  return brut || secours;
+}
+
 /* ------------------------------------------------------------------ */
 /* Hook générique de récupération API                                   */
 /* ------------------------------------------------------------------ */
@@ -33,7 +51,7 @@ export function useApi(path, deps = []) {
     setState((s) => ({ ...s, loading: !s.loaded, error: null }));
     apiGet(path)
       .then((data) => setState({ data, loading: false, error: null, loaded: true }))
-      .catch((e) => setState((s) => ({ ...s, loading: false, error: e.message, loaded: true })));
+      .catch((e) => setState((s) => ({ ...s, loading: false, error: messageErreur(e, "Impossible de charger les données."), loaded: true })));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 

@@ -1,4 +1,4 @@
-import { ArrowLeft, Ghost, RefreshCw, WifiOff, Sparkles, FileText, TriangleAlert, ScrollText, Clock, ShieldCheck } from "lucide-react";
+import { ArrowLeft, Ghost, RefreshCw, WifiOff, Sparkles, FileText, TriangleAlert, ScrollText, Clock, ShieldCheck, MessageSquare } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 
 /* ------------------------------------------------------------------ */
@@ -73,6 +73,29 @@ export function SectionLabel({ children }) {
 export function Divider() {
   const { C } = useTheme();
   return <div style={{ height: 1, background: C.line, margin: "16px 20px" }} />;
+}
+
+// Petits indicateurs (documents/notes/génération IA) sur une ligne de la
+// liste des cours (Accueil, Matières) — un seul coup d'œil sans avoir à
+// ouvrir le cours. Un compte à 0 ne s'affiche pas : pas la peine d'occuper
+// de la place pour dire qu'il n'y a rien.
+export function IndicateursCours({ c }) {
+  const { C } = useTheme();
+  const items = [];
+  if (c.nb_documents > 0) items.push({ key: "documents", Icon: FileText, label: c.nb_documents, title: `${c.nb_documents} document(s)` });
+  if (c.nb_notes > 0) items.push({ key: "notes", Icon: MessageSquare, label: c.nb_notes, title: `${c.nb_notes} note(s) d'élève` });
+  if (c.ia_statut === "pret") items.push({ key: "ia", Icon: Sparkles, label: null, title: "Résumé/flashcards/quiz générés" });
+  if (items.length === 0) return null;
+  return (
+    <div className="flex items-center gap-2" style={{ marginTop: 4 }}>
+      {items.map(({ key, Icon, label, title }) => (
+        <span key={key} title={title} style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, color: C.inkFaint }}>
+          <Icon size={12} />
+          {label != null && label}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 /* ------------------------------------------------------------------ */

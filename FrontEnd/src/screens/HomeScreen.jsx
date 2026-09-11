@@ -2,7 +2,7 @@ import { useState } from "react";
 import { ChevronRight, RefreshCw } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 import { API_BASE, useApi } from "../api";
-import { Loading, ApiError, EmptyState, SectionLabel, Divider } from "../components/Shared";
+import { Loading, ApiError, EmptyState, SectionLabel, Divider, IndicateursCours } from "../components/Shared";
 
 /* ------------------------------------------------------------------ */
 /* Accueil                                                              */
@@ -128,6 +128,7 @@ export function HomeScreen({ onOpenSubject, onOpenCours }) {
                   <div style={{ fontSize: 12, color: C.inkSoft, marginTop: 1 }}>
                     {c.matiere} · {new Date(c.date).toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}
                   </div>
+                  <IndicateursCours c={c} />
                 </div>
                 <ChevronRight size={16} color={C.inkFaint} />
               </button>

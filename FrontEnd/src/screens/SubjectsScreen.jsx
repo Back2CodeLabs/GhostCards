@@ -1,7 +1,7 @@
 import { ChevronRight } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 import { useApi } from "../api";
-import { Loading, ApiError, EmptyState, ScreenHeader } from "../components/Shared";
+import { Loading, ApiError, EmptyState, ScreenHeader, IndicateursCours } from "../components/Shared";
 
 /* ------------------------------------------------------------------ */
 /* Matières                                                             */
@@ -74,6 +74,7 @@ export function SubjectDetail({ subjectId, subjectName, onBack, onOpenCours }) {
               {new Date(c.date).toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", month: "short" })} · {c.heure_debut}
               {c.professeur ? ` · ${c.professeur}` : ""}
             </div>
+            <IndicateursCours c={c} />
           </button>
         ))}
       </div>
