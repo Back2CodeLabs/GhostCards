@@ -294,6 +294,38 @@ def recent_cours(limit: int = 8):
         return [dict(r) for r in rows]
 
 
+@app.get("/api/cours/non-generes")
+def cours_non_generes(request: Request):
+    """
+    Cours sans résumé/flashcards/quiz (jamais générés, ou dernière tentative
+    en échec) qui ont pourtant de quoi générer (description et/ou document
+    transcrit non vide — voir Services/ia_generation.py::_texte_source) :
+    sert à l'écran admin "Traitements" pour déclencher la génération sans
+    avoir à ouvrir chaque cours un par un. Les cours sans aucune source
+    n'apparaissent pas ici : les lister sans rien à en tirer n'aiderait pas.
+
+    Déclarée ici, AVANT /api/cours/{cours_id} : une route à paramètre du
+    même préfixe capturerait sinon "non-generes" comme un id (voir
+    HANDOFF.md, piège déjà rencontré une fois avec /api/cours/recents).
+    """
+    _require_admin(request)
+    with db.session() as conn:
+        rows = conn.execute(
+            """SELECT c.id, c.date, c.heure_debut, c.titre, m.nom AS matiere, c.ia_statut, c.ia_erreur
+               FROM cours c JOIN matieres m ON m.id = c.matiere_id
+               WHERE c.ia_statut IN ('absent', 'echec')
+                 AND (
+                   (c.description IS NOT NULL AND c.description != '')
+                   OR EXISTS (
+                     SELECT 1 FROM documents d
+                     WHERE d.cours_id = c.id AND d.texte_extrait IS NOT NULL AND d.texte_extrait != ''
+                   )
+                 )
+               ORDER BY c.date DESC, c.heure_debut DESC"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 @app.get("/api/cours/{cours_id}")
 def get_cours(cours_id: int):
     with db.session() as conn:

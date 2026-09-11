@@ -115,13 +115,16 @@ export function TraitementsScreen({ onOpenTraitement }) {
   const { C } = useTheme();
   const traitements = useApi("/api/traitements");
   const nonTraites = useApi("/api/documents/non-transcrits");
+  const coursNonGeneres = useApi("/api/cours/non-generes");
   const [sousMenu, setSousMenu] = useState("pronote");
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState(null);
   const [actingId, setActingId] = useState(null);
   const [actionError, setActionError] = useState(null);
-  const [lancementId, setLancementId] = useState(null);
+  const [lancementDocId, setLancementDocId] = useState(null);
   const [lancementError, setLancementError] = useState(null);
+  const [lancementCoursId, setLancementCoursId] = useState(null);
+  const [lancementCoursError, setLancementCoursError] = useState(null);
 
   // Déclenche la transcription d'un document qui n'a encore aucune ligne
   // `traitements` (donc rien à "relancer" — voir /api/documents/{id}/transcrire).
@@ -129,7 +132,7 @@ export function TraitementsScreen({ onOpenTraitement }) {
   // en arrière-plan, la ligne n'apparaît dans `traitements` qu'une fois
   // qu'il a réellement démarré (voir Services/db.py::log_traitement).
   async function lancerTranscription(documentId) {
-    setLancementId(documentId);
+    setLancementDocId(documentId);
     setLancementError(null);
     try {
       const res = await fetch(`${API_BASE}/api/documents/${documentId}/transcrire`, { method: "POST" });
@@ -140,11 +143,35 @@ export function TraitementsScreen({ onOpenTraitement }) {
       setTimeout(() => {
         nonTraites.reload();
         traitements.reload();
-        setLancementId(null);
+        setLancementDocId(null);
       }, 1500);
     } catch (e) {
       setLancementError(messageErreur(e, "Impossible de lancer la transcription."));
-      setLancementId(null);
+      setLancementDocId(null);
+    }
+  }
+
+  // Même endpoint public que le bouton "Générer" sur la page d'un cours
+  // (BackEnd/app/main.py::generer_contenu_ia) : part immédiatement puisque
+  // ces cours n'ont encore aucun résumé (voir le filtre de
+  // GET /api/cours/non-generes) — pas de demande d'approbation admin ici,
+  // celle-ci ne s'applique qu'à une RÉgénération.
+  async function lancerGeneration(coursId) {
+    setLancementCoursId(coursId);
+    setLancementCoursError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/cours/${coursId}/generer`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Erreur ${res.status}`);
+      }
+      setTimeout(() => {
+        coursNonGeneres.reload();
+        setLancementCoursId(null);
+      }, 1500);
+    } catch (e) {
+      setLancementCoursError(messageErreur(e, "Impossible de lancer la génération."));
+      setLancementCoursId(null);
     }
   }
 
@@ -217,6 +244,7 @@ export function TraitementsScreen({ onOpenTraitement }) {
       )}
       {sousMenu === "non_traites" && (
         <div style={{ padding: "0 20px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+          <p style={{ fontFamily: uiFont, fontSize: 11.5, fontWeight: 700, color: C.inkFaint, letterSpacing: 0.3, margin: "0 0 2px" }}>DOCUMENTS</p>
           <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: "0 0 4px" }}>
             Documents sans texte extrait : jamais transcrits, ou dernière tentative en échec.
           </p>
@@ -248,11 +276,52 @@ export function TraitementsScreen({ onOpenTraitement }) {
               </div>
               <button
                 onClick={() => lancerTranscription(d.id)}
-                disabled={lancementId === d.id}
-                style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, background: C.hauntSoft, color: C.haunt, border: "none", borderRadius: 8, padding: "7px 12px", fontFamily: uiFont, fontSize: 12, fontWeight: 700, cursor: lancementId === d.id ? "default" : "pointer" }}
+                disabled={lancementDocId === d.id}
+                style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, background: C.hauntSoft, color: C.haunt, border: "none", borderRadius: 8, padding: "7px 12px", fontFamily: uiFont, fontSize: 12, fontWeight: 700, cursor: lancementDocId === d.id ? "default" : "pointer" }}
               >
-                <RotateCcw size={13} style={lancementId === d.id ? { animation: "spin 1s linear infinite" } : {}} />
-                {lancementId === d.id ? "Lancement…" : "Transcrire"}
+                <RotateCcw size={13} style={lancementDocId === d.id ? { animation: "spin 1s linear infinite" } : {}} />
+                {lancementDocId === d.id ? "Lancement…" : "Transcrire"}
+              </button>
+            </div>
+          ))}
+
+          <p style={{ fontFamily: uiFont, fontSize: 11.5, fontWeight: 700, color: C.inkFaint, letterSpacing: 0.3, margin: "12px 0 2px" }}>COURS</p>
+          <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: "0 0 4px" }}>
+            Cours avec de quoi générer (description ou document transcrit) mais sans résumé/flashcards/quiz — jamais générés, ou dernière tentative en échec.
+          </p>
+          {lancementCoursError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: 0 }}>{lancementCoursError}</p>}
+          {coursNonGeneres.loading && <Loading />}
+          {coursNonGeneres.error && <ApiError message={coursNonGeneres.error} onRetry={coursNonGeneres.reload} />}
+          {coursNonGeneres.data && coursNonGeneres.data.length === 0 && (
+            <EmptyState text="Aucun cours en attente de génération." icon={Sparkles} />
+          )}
+          {coursNonGeneres.data?.map((c) => (
+            <div
+              key={c.id}
+              style={{ display: "flex", alignItems: "center", gap: 10, background: C.white, border: `1px solid ${C.line}`, borderLeft: `3px solid ${c.ia_statut === "echec" ? C.brick : C.inkFaint}`, borderRadius: 10, padding: "12px 14px", fontFamily: uiFont }}
+            >
+              <Sparkles size={16} color={c.ia_statut === "echec" ? C.brick : C.inkFaint} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13.5, color: C.ink, fontWeight: 600 }}>{c.titre || "Cours"}</div>
+                <div style={{ fontSize: 12, color: C.inkSoft, marginTop: 2 }}>
+                  {c.matiere} · {new Date(c.date).toLocaleDateString("fr-FR", { day: "numeric", month: "short" })} · {c.ia_statut === "echec" ? "Échec précédent" : "Jamais généré"}
+                </div>
+                {c.ia_erreur && (
+                  <div
+                    title={c.ia_erreur}
+                    style={{ fontSize: 11.5, color: C.brick, marginTop: 2, fontFamily: "monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                  >
+                    {c.ia_erreur}
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={() => lancerGeneration(c.id)}
+                disabled={lancementCoursId === c.id}
+                style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, background: C.hauntSoft, color: C.haunt, border: "none", borderRadius: 8, padding: "7px 12px", fontFamily: uiFont, fontSize: 12, fontWeight: 700, cursor: lancementCoursId === c.id ? "default" : "pointer" }}
+              >
+                <Sparkles size={13} style={lancementCoursId === c.id ? { animation: "spin 1s linear infinite" } : {}} />
+                {lancementCoursId === c.id ? "Lancement…" : "Générer"}
               </button>
             </div>
           ))}
