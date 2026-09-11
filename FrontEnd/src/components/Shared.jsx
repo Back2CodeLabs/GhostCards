@@ -1,4 +1,4 @@
-import { ArrowLeft, Ghost, RefreshCw, WifiOff, Sparkles, FileText, TriangleAlert, ScrollText, Clock, ShieldCheck, MessageSquare, MapPin, Ban } from "lucide-react";
+import { ArrowLeft, Ghost, RefreshCw, WifiOff, Sparkles, FileText, TriangleAlert, ScrollText, Clock, ShieldCheck, MessageSquare, MapPin, Ban, FileWarning } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 
 /* ------------------------------------------------------------------ */
@@ -157,6 +157,11 @@ export const SOUS_MENU_VERIFICATION = { key: "verification", label: "Vérificati
 // attente de validation admin n'ont pas leur place dans Pronote/Génération
 // IA/OCR (ce ne sont pas encore des traitements exécutés).
 export const SOUS_MENU_EN_ATTENTE = { key: "demandes", label: "En attente", Icon: Clock };
+
+// Idem : documents jamais transcrits ou en échec (voir
+// GET /api/documents/non-transcrits) — pas des traitements exécutés,
+// donc pas mélangés à la liste "OCR" qui ne montre que l'historique.
+export const SOUS_MENU_NON_TRAITES = { key: "non_traites", label: "Non traités", Icon: FileWarning };
 
 export function SousMenu({ actif, onChange, extra }) {
   const { C } = useTheme();

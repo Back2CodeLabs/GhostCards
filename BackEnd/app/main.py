@@ -565,6 +565,47 @@ def relancer_traitement(traitement_id: int, request: Request, background_tasks: 
     return {"status": "relance_lancee"}
 
 
+@app.get("/api/documents/non-transcrits")
+def documents_non_transcrits(request: Request):
+    """
+    Documents Pronote sans texte extrait : soit jamais transcrits (aucune
+    ligne `traitements` pour eux — ex. téléchargés avant la mise en place
+    de l'OCR automatique), soit dont la dernière tentative a échoué
+    (`texte_extrait` reste NULL dans les deux cas — voir Services/ocr.py).
+    Sert à l'écran admin "Traitements" pour proposer un déclenchement
+    manuel, faute de ligne `traitements` existante à relancer pour le
+    premier cas.
+    """
+    _require_admin(request)
+    with db.session() as conn:
+        rows = conn.execute(
+            """SELECT d.id, d.nom_fichier, d.created_at, m.nom AS matiere,
+                      (SELECT statut FROM traitements WHERE cible_type = 'document' AND cible_id = d.id ORDER BY id DESC LIMIT 1) AS dernier_statut,
+                      (SELECT erreur FROM traitements WHERE cible_type = 'document' AND cible_id = d.id ORDER BY id DESC LIMIT 1) AS derniere_erreur
+               FROM documents d
+               LEFT JOIN cours c ON d.cours_id = c.id
+               LEFT JOIN devoirs dv ON d.devoir_id = dv.id
+               LEFT JOIN matieres m ON m.id = COALESCE(c.matiere_id, dv.matiere_id)
+               WHERE d.texte_extrait IS NULL AND d.chemin_local NOT LIKE 'lien:%'
+               ORDER BY d.created_at DESC"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.post("/api/documents/{document_id}/transcrire")
+def transcrire_document(document_id: int, request: Request, background_tasks: BackgroundTasks):
+    """
+    Déclenche une transcription pour un document qui n'en a encore jamais
+    eu (donc sans ligne `traitements` à relancer via l'endpoint ci-dessus).
+    """
+    _require_admin(request)
+    with db.session() as conn:
+        if conn.execute("SELECT 1 FROM documents WHERE id = ?", (document_id,)).fetchone() is None:
+            raise HTTPException(404, "Document introuvable")
+    background_tasks.add_task(ocr.transcribe_document, document_id)
+    return {"status": "transcription_lancee"}
+
+
 @app.get("/api/eleves")
 def list_eleves(request: Request):
     """Liste des comptes élèves (Google) — outil admin, jamais exposé aux élèves eux-mêmes."""

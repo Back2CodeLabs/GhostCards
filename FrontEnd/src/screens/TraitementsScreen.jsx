@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { ChevronRight, ListChecks, CheckCircle2, XCircle, Loader2, Sparkles, RotateCcw, RefreshCw, FileText, Clock, Check, X, ShieldCheck } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 import { API_BASE, useApi, messageErreur } from "../api";
-import { Loading, ApiError, EmptyState, ScreenHeader, SousMenu, SOUS_MENU_EN_ATTENTE } from "../components/Shared";
+import { Loading, ApiError, EmptyState, ScreenHeader, SousMenu, SOUS_MENU_EN_ATTENTE, SOUS_MENU_NON_TRAITES } from "../components/Shared";
 import { ResultatFormatte } from "../components/ResultatFormatte";
 
 /* ------------------------------------------------------------------ */
@@ -114,11 +114,39 @@ const MESSAGES_VIDES = {
 export function TraitementsScreen({ onOpenTraitement }) {
   const { C } = useTheme();
   const traitements = useApi("/api/traitements");
+  const nonTraites = useApi("/api/documents/non-transcrits");
   const [sousMenu, setSousMenu] = useState("pronote");
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState(null);
   const [actingId, setActingId] = useState(null);
   const [actionError, setActionError] = useState(null);
+  const [lancementId, setLancementId] = useState(null);
+  const [lancementError, setLancementError] = useState(null);
+
+  // Déclenche la transcription d'un document qui n'a encore aucune ligne
+  // `traitements` (donc rien à "relancer" — voir /api/documents/{id}/transcrire).
+  // Recharge les deux listes après un court délai : le traitement tourne
+  // en arrière-plan, la ligne n'apparaît dans `traitements` qu'une fois
+  // qu'il a réellement démarré (voir Services/db.py::log_traitement).
+  async function lancerTranscription(documentId) {
+    setLancementId(documentId);
+    setLancementError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/documents/${documentId}/transcrire`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Erreur ${res.status}`);
+      }
+      setTimeout(() => {
+        nonTraites.reload();
+        traitements.reload();
+        setLancementId(null);
+      }, 1500);
+    } catch (e) {
+      setLancementError(messageErreur(e, "Impossible de lancer la transcription."));
+      setLancementId(null);
+    }
+  }
 
   // Valide ou rejette une demande de régénération en attente (voir
   // BackEnd/app/main.py::valider_demande_regeneration/rejeter_demande_regeneration) —
@@ -172,7 +200,7 @@ export function TraitementsScreen({ onOpenTraitement }) {
         </p>
       </div>
       <div style={{ padding: "16px 0 0" }}>
-        <SousMenu actif={sousMenu} onChange={setSousMenu} extra={[SOUS_MENU_EN_ATTENTE]} />
+        <SousMenu actif={sousMenu} onChange={setSousMenu} extra={[SOUS_MENU_EN_ATTENTE, SOUS_MENU_NON_TRAITES]} />
       </div>
       {sousMenu === "pronote" && (
         <div style={{ padding: "0 20px 16px" }}>
@@ -187,6 +215,50 @@ export function TraitementsScreen({ onOpenTraitement }) {
           {syncError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "8px 0 0" }}>{syncError}</p>}
         </div>
       )}
+      {sousMenu === "non_traites" && (
+        <div style={{ padding: "0 20px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+          <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: "0 0 4px" }}>
+            Documents sans texte extrait : jamais transcrits, ou dernière tentative en échec.
+          </p>
+          {lancementError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: 0 }}>{lancementError}</p>}
+          {nonTraites.loading && <Loading />}
+          {nonTraites.error && <ApiError message={nonTraites.error} onRetry={nonTraites.reload} />}
+          {nonTraites.data && nonTraites.data.length === 0 && (
+            <EmptyState text="Aucun document en attente de transcription." icon={FileText} />
+          )}
+          {nonTraites.data?.map((d) => (
+            <div
+              key={d.id}
+              style={{ display: "flex", alignItems: "center", gap: 10, background: C.white, border: `1px solid ${C.line}`, borderLeft: `3px solid ${d.dernier_statut === "echec" ? C.brick : C.inkFaint}`, borderRadius: 10, padding: "12px 14px", fontFamily: uiFont }}
+            >
+              <FileText size={16} color={d.dernier_statut === "echec" ? C.brick : C.inkFaint} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13.5, color: C.ink, fontWeight: 600 }}>{d.nom_fichier}</div>
+                <div style={{ fontSize: 12, color: C.inkSoft, marginTop: 2 }}>
+                  {d.matiere || "Sans matière"} · {d.dernier_statut === "echec" ? "Échec précédent" : "Jamais transcrit"}
+                </div>
+                {d.derniere_erreur && (
+                  <div
+                    title={d.derniere_erreur}
+                    style={{ fontSize: 11.5, color: C.brick, marginTop: 2, fontFamily: "monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                  >
+                    {d.derniere_erreur}
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={() => lancerTranscription(d.id)}
+                disabled={lancementId === d.id}
+                style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, background: C.hauntSoft, color: C.haunt, border: "none", borderRadius: 8, padding: "7px 12px", fontFamily: uiFont, fontSize: 12, fontWeight: 700, cursor: lancementId === d.id ? "default" : "pointer" }}
+              >
+                <RotateCcw size={13} style={lancementId === d.id ? { animation: "spin 1s linear infinite" } : {}} />
+                {lancementId === d.id ? "Lancement…" : "Transcrire"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {sousMenu !== "non_traites" && (
       <div style={{ padding: "0 20px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
         {traitements.loading && <Loading />}
         {traitements.error && <ApiError message={traitements.error} onRetry={traitements.reload} />}
@@ -255,6 +327,7 @@ export function TraitementsScreen({ onOpenTraitement }) {
           );
         })}
       </div>
+      )}
     </div>
   );
 }
