@@ -4,10 +4,7 @@ import { useTheme, uiFont } from "../theme";
 import { API_BASE, useApi, messageErreur } from "../api";
 import { Loading, ApiError, ScreenHeader, AvertissementIA } from "../components/Shared";
 import { ExamMode } from "../components/ExamMode";
-
-// Durée de l'animation .gc-evaporate (index.css) — le mode examen ne
-// bascule qu'une fois le cours "évaporé", pas avant.
-const DUREE_EVAPORATION_MS = 600;
+import { disintegrate } from "../lib/disintegrate";
 
 // Dernier résultat d'examen : mémorisé par navigateur (localStorage), pas
 // par compte élève — prendre un examen ne nécessite pas de connexion, donc
@@ -53,14 +50,20 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin, onOpenTraitem
   const [completing, setCompleting] = useState(false);
   const [completingError, setCompletingError] = useState(null);
   const [resumeDetaille, setResumeDetaille] = useState(false);
-  // "off" (cours visible normalement) → "evaporating" (animation en cours,
-  // voir .gc-evaporate) → "active" (mode examen affiché, cours masqué).
+  // "off" (cours visible normalement) → "evaporating" (effet de
+  // désintégration en cours, voir lib/disintegrate.js) → "active" (mode
+  // examen affiché, cours masqué).
   const [examPhase, setExamPhase] = useState("off");
   const [dernierExamen, setDernierExamen] = useState(() => lireResultatExamen(coursId));
+  const contentRef = useRef(null);
 
   function entrerModeExamen() {
     setExamPhase("evaporating");
-    setTimeout(() => setExamPhase("active"), DUREE_EVAPORATION_MS);
+    if (contentRef.current) {
+      disintegrate(contentRef.current, { onDone: () => setExamPhase("active"), backgroundColor: C.paperDim });
+    } else {
+      setExamPhase("active");
+    }
   }
   function quitterModeExamen() {
     setExamPhase("off");
@@ -210,11 +213,15 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin, onOpenTraitem
     <div style={{ paddingBottom: 28 }}>
       <ScreenHeader title={c.titre || "Cours"} onBack={onBack} />
       {examPhase === "active" ? (
-        <div style={{ padding: "16px 20px 0" }}>
+        // `key` distinctes : sans ça, React réutilise le même nœud DOM que
+        // le contenu normal ci-dessous (même type/position dans ce
+        // ternaire), et le `visibility: hidden` posé dessus par
+        // lib/disintegrate.js resterait collé sur le mode examen.
+        <div key="exam" style={{ padding: "16px 20px 0" }}>
           <ExamMode flashcards={c.ia_flashcards} quiz={c.ia_quiz} onExit={quitterModeExamen} onFinish={finirExamen} />
         </div>
       ) : (
-      <div style={{ padding: "16px 20px 0" }} className={examPhase === "evaporating" ? "gc-evaporate" : ""}>
+      <div key="contenu" ref={contentRef} style={{ padding: "16px 20px 0" }}>
         <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkSoft, margin: 0 }}>
           {new Date(c.date).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })} · {c.heure_debut}
           {c.professeur ? ` · ${c.professeur}` : ""}
