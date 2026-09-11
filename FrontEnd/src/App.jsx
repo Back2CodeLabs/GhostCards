@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import "./index.css";
 import { Ghost, Moon, Sun } from "lucide-react";
 
-import { ThemeContext, uiFont, glowText, makeColorFor, LIGHT, DARK, LIGHT_PALETTE, DARK_PALETTE } from "./theme";
+import { ThemeContext, uiFont, glowText, makeColorFor, LIGHT, DARK } from "./theme";
 import { useMe } from "./api";
 
 import { Nav, AuthControl, AdminControl, RetroGrid } from "./components/Nav";
@@ -28,8 +28,7 @@ export default function App() {
   const me = useMe();
 
   const C = themeName === "dark" ? DARK : LIGHT;
-  const palette = themeName === "dark" ? DARK_PALETTE : LIGHT_PALETTE;
-  const colorFor = makeColorFor(C, palette);
+  const colorFor = makeColorFor(C);
   const themeValue = { C, colorFor, themeName };
 
   function switchTab(t) {

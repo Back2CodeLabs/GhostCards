@@ -63,14 +63,28 @@ export const DARK = {
   neonGlow: true,
 };
 
-export const LIGHT_PALETTE = [LIGHT.haunt, LIGHT.spectral, "#B4860F", "#2E6FA3", "#5C8A2E", LIGHT.brick];
-export const DARK_PALETTE = [DARK.haunt, DARK.spectral, "#FFD23E", "#3EC1FF", "#9DFF3E", DARK.brick];
+// Une matière par teinte, générée à la volée plutôt que piochée dans une
+// petite palette fixe : avec seulement 6 couleurs fixes, la 7e matière
+// répétait la couleur de la 1re (id % 6), deux matières sans rapport
+// devenant indiscernables au premier coup d'œil dans "Mes matières"/le
+// bandeau de couleur des cartes. L'angle d'or (~137.5°) espace les teintes
+// de façon à peu près uniforme sur le cercle chromatique même pour des id
+// consécutifs, contrairement à un simple pas fixe (360°/n) qui look "arc-
+// en-ciel" ordonné. Saturation/luminosité fixes par thème (calibrées pour
+// rester lisibles : sombre = néon vif sur fond noir, clair = teinte foncée
+// sur fond clair), seule la teinte varie par matière.
+const GOLDEN_ANGLE = 137.508;
 
-export function makeColorFor(C, palette) {
-  const soft = { [C.haunt]: C.hauntSoft, [C.spectral]: C.spectralSoft, [C.brick]: C.brickSoft };
+export function makeColorFor(C) {
+  const isDark = C.name === "dark";
+  const s = isDark ? 85 : 60;
+  const l = isDark ? 65 : 35;
   return function colorFor(id) {
-    const c = palette[id % palette.length];
-    return { color: c, soft: soft[c] || C.paperDim };
+    const hue = ((id * GOLDEN_ANGLE) % 360 + 360) % 360;
+    return {
+      color: `hsl(${hue.toFixed(1)}deg ${s}% ${l}%)`,
+      soft: `hsl(${hue.toFixed(1)}deg ${s}% ${l}% / ${isDark ? 0.18 : 0.12})`,
+    };
   };
 }
 
