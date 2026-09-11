@@ -127,11 +127,15 @@ récente" en SSH. Vérifie que ce `PATH` inclut bien `/usr/bin` en plus du
 sur une transcription d'image — régression connue de `paddlepaddle` 3.3.x
 sur CPU avec l'accélération oneDNN (voir
 [PaddlePaddle/Paddle#77340](https://github.com/PaddlePaddle/Paddle/issues/77340)),
-pas propre à un document en particulier. Corrigé en désactivant oneDNN
-(`enable_mkldnn=False` dans `_paddleocr()`, `Services/ocr.py`) — un peu
-plus lent, mais fonctionne ; pas de correctif officiel de PaddlePaddle au
-moment de l'écriture. Les transcriptions déjà en échec pour cette raison
-ne se relancent pas toutes seules : bouton "Relancer" sur chacune depuis
+pas propre à un document en particulier. oneDNN est désormais désactivé
+par défaut (réglage "Accélération oneDNN (CPU)" dans Paramétrage → OCR,
+section avancée) — un peu plus lent sur CPU, mais fonctionne ; pas de
+correctif officiel de PaddlePaddle au moment de l'écriture. À réactiver
+seulement si ce bug est corrigé côté PaddlePaddle, ou constaté absent sur
+une machine où l'accélération apporte un vrai gain. Les transcriptions
+déjà en échec pour cette raison ne se relancent pas toutes seules : bouton
+"Relancer" sur chacune (ou "Transcrire" depuis l'onglet "Non traités" pour
+un document qui n'a encore jamais eu de tentative) depuis
 l'écran admin "Traitements".
 
 Chaque extraction/OCR est journalisée dans la table `traitements`, visible

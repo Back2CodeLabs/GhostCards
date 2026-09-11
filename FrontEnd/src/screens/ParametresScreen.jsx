@@ -86,6 +86,7 @@ export function ParametresScreen() {
   const [syncDaysForward, setSyncDaysForward] = useState("");
   const [matieresExclues, setMatieresExclues] = useState("");
   const [ocrEngine, setOcrEngine] = useState("paddleocr");
+  const [paddleocrEnableMkldnn, setPaddleocrEnableMkldnn] = useState(false);
   const [verifMoteur, setVerifMoteur] = useState("claude");
   const [verifOllamaUrl, setVerifOllamaUrl] = useState("");
   const [verifOllamaModel, setVerifOllamaModel] = useState("");
@@ -112,6 +113,7 @@ export function ParametresScreen() {
       setSyncDaysForward(String(parametres.data.sync_days_forward ?? ""));
       setMatieresExclues(parametres.data.matieres_exclues || "");
       setOcrEngine(parametres.data.ocr_engine || "paddleocr");
+      setPaddleocrEnableMkldnn(parametres.data.paddleocr_enable_mkldnn ?? false);
       setVerifMoteur(parametres.data.verif_moteur || "claude");
       setVerifOllamaUrl(parametres.data.verif_ollama_url || "");
       setVerifOllamaModel(parametres.data.verif_ollama_model || "");
@@ -169,6 +171,7 @@ export function ParametresScreen() {
         sync_days_forward: syncDaysForward.trim() ? parseInt(syncDaysForward, 10) : null,
         matieres_exclues: matieresExclues,
         ocr_engine: ocrEngine,
+        paddleocr_enable_mkldnn: paddleocrEnableMkldnn,
         verif_moteur: verifMoteur,
         verif_ollama_url: verifOllamaUrl.trim() || null,
         verif_ollama_model: verifOllamaModel.trim() || null,
@@ -510,6 +513,34 @@ export function ParametresScreen() {
                 <p style={{ fontFamily: uiFont, fontSize: 12, color: C.inkFaint, margin: 0 }}>
                   Même clé que le sous-menu Génération IA (un seul compte Anthropic pour toute l'application).
                 </p>
+              </div>
+            )}
+
+            {ocrEngine === "paddleocr" && (
+              <div style={{ marginTop: 14 }}>
+                <p style={{ fontFamily: uiFont, fontSize: 11.5, fontWeight: 700, color: C.inkFaint, letterSpacing: 0.3, margin: "0 0 8px" }}>AVANCÉ</p>
+                <label style={{ display: "flex", gap: 10, alignItems: "flex-start", background: C.paperDim, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={paddleocrEnableMkldnn}
+                    onChange={(e) => setPaddleocrEnableMkldnn(e.target.checked)}
+                    style={{ marginTop: 3 }}
+                  />
+                  <div>
+                    <div style={{ fontFamily: uiFont, fontSize: 13.5, fontWeight: 700, color: C.ink }}>Accélération oneDNN (CPU)</div>
+                    <div style={{ fontFamily: uiFont, fontSize: 12, color: C.inkSoft, marginTop: 2 }}>
+                      Désactivée par défaut : une régression connue de PaddlePaddle 3.3.x fait planter
+                      la transcription avec cette accélération activée, sur certaines machines
+                      (<code>ConvertPirAttribute2RuntimeAttribute not support</code>, voir{" "}
+                      <a href="https://github.com/PaddlePaddle/Paddle/issues/77340" target="_blank" rel="noreferrer" style={{ color: C.haunt }}>
+                        PaddlePaddle/Paddle#77340
+                      </a>). La transcription est un peu plus lente sans elle, mais fonctionne de
+                      façon fiable. À réactiver seulement si ce bug est corrigé, ou si tu constates
+                      qu'il ne se manifeste pas sur ta machine et que l'accélération apporte un vrai
+                      gain de vitesse — sans effet si le moteur choisi ci-dessus est Claude (Vision).
+                    </div>
+                  </div>
+                </label>
               </div>
             )}
           </div>

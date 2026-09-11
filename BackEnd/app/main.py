@@ -643,6 +643,7 @@ def get_parametres(request: Request):
         "matieres_exclues": matieres_exclues,
         "pronote_jeton_present": CREDENTIALS_PATH.exists(),
         "ocr_engine": ocr_cfg["moteur"],
+        "paddleocr_enable_mkldnn": ocr_cfg["paddleocr_enable_mkldnn"],
         # Vérification (Services/ia_verification.py) : moteur indépendant de
         # celui de Génération IA (même clés Anthropic/Gemini, partagées).
         "verif_moteur": verif_cfg["moteur"],
@@ -686,6 +687,7 @@ class ParametresIA(BaseModel):
     sync_days_forward: int | None = None
     matieres_exclues: str | None = None
     ocr_engine: str | None = None
+    paddleocr_enable_mkldnn: bool | None = None
     verif_moteur: str | None = None
     verif_ollama_url: str | None = None
     verif_ollama_model: str | None = None
@@ -737,6 +739,8 @@ def set_parametres(payload: ParametresIA, request: Request):
             db.set_parametre(conn, "matieres_exclues", payload.matieres_exclues)
         if payload.ocr_engine:
             db.set_parametre(conn, "ocr_engine", payload.ocr_engine)
+        if payload.paddleocr_enable_mkldnn is not None:
+            db.set_parametre(conn, "paddleocr_enable_mkldnn", "1" if payload.paddleocr_enable_mkldnn else "0")
         if payload.verif_moteur:
             db.set_parametre(conn, "verif_moteur", payload.verif_moteur)
         if payload.verif_ollama_url:

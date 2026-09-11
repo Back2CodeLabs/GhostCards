@@ -51,6 +51,9 @@ def config_ocr(conn) -> dict:
     return {
         "moteur": moteur,
         "anthropic_api_key": db.get_parametre(conn, "anthropic_api_key", ANTHROPIC_API_KEY),
+        # Avancé, désactivé par défaut — voir le commentaire sur
+        # ocr_image_paddleocr pour le pourquoi.
+        "paddleocr_enable_mkldnn": db.get_parametre(conn, "paddleocr_enable_mkldnn", "0") == "1",
     }
 
 
@@ -171,18 +174,21 @@ def ocr_image_claude(image_path: Path, api_key: str) -> str:
 
 
 _paddleocr_instance = None
+_paddleocr_instance_enable_mkldnn = None
 
 
-def _paddleocr():
+def _paddleocr(enable_mkldnn: bool):
     """
     Charge et met en cache le pipeline PaddleOCR (l'instanciation charge les
     modèles de détection/orientation/reconnaissance en mémoire — coûteux,
-    donc fait une seule fois par process, pas à chaque image).
+    donc fait une seule fois par process, pas à chaque image). Reconstruit
+    le pipeline si `enable_mkldnn` a changé depuis la dernière fois (réglage
+    modifiable à chaud depuis l'écran admin, voir `config_ocr`).
     Nécessite un venv Python <=3.13 (PaddlePaddle n'a pas de wheels pour
     Python 3.14 au moment de l'écriture — voir HANDOFF.md).
     """
-    global _paddleocr_instance
-    if _paddleocr_instance is None:
+    global _paddleocr_instance, _paddleocr_instance_enable_mkldnn
+    if _paddleocr_instance is None or _paddleocr_instance_enable_mkldnn != enable_mkldnn:
         try:
             from paddleocr import PaddleOCR
         except ImportError as e:
@@ -195,26 +201,31 @@ def _paddleocr():
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,
-            # Régression connue de paddlepaddle 3.3.x sur CPU : l'accélération
-            # oneDNN plante à l'inférence sur certains modèles avec
-            # "NotImplementedError: ConvertPirAttribute2RuntimeAttribute not
-            # support [pir::ArrayAttribute<pir::DoubleAttribute>]" (voir
-            # PaddlePaddle/Paddle#77340). Désactivée : légèrement plus lent,
-            # mais fonctionne — pas de correctif officiel au moment de l'écriture.
-            enable_mkldnn=False,
+            enable_mkldnn=enable_mkldnn,
         )
+        _paddleocr_instance_enable_mkldnn = enable_mkldnn
     return _paddleocr_instance
 
 
-def ocr_image_paddleocr(image_path: Path) -> str:
+def ocr_image_paddleocr(image_path: Path, enable_mkldnn: bool = False) -> str:
     """
     Moteur local et gratuit (voir HANDOFF.md pour le choix de moteur par
     défaut). Le premier appel télécharge les modèles PP-OCR (mis en cache
     par PaddleX/PaddleOCR, hors dépôt) — nécessite un accès réseau la
     première fois seulement.
+
+    `enable_mkldnn` : accélération CPU (oneDNN), désactivée par défaut — une
+    régression connue de paddlepaddle 3.3.x la fait planter à l'inférence
+    sur certains modèles avec "NotImplementedError:
+    ConvertPirAttribute2RuntimeAttribute not support
+    [pir::ArrayAttribute<pir::DoubleAttribute>]" (voir
+    PaddlePaddle/Paddle#77340, pas de correctif officiel au moment de
+    l'écriture). Réglable depuis l'écran admin Paramétrage → OCR (section
+    avancée) — utile si ce bug est corrigé plus tard, ou sur une machine où
+    il ne se manifeste pas et où l'accélération apporte un vrai gain.
     """
     lignes = []
-    for res in _paddleocr().predict(str(image_path)):
+    for res in _paddleocr(enable_mkldnn).predict(str(image_path)):
         data = res.json if hasattr(res, "json") else res
         # La forme exacte (racine ou sous 'res') a varié entre versions de
         # PaddleOCR/PaddleX — on couvre les deux plutôt que de deviner.
@@ -226,7 +237,7 @@ def ocr_image_paddleocr(image_path: Path) -> str:
 def _ocr_engine_fn(cfg: dict):
     if cfg["moteur"] == "claude":
         return lambda image_path: ocr_image_claude(image_path, cfg["anthropic_api_key"])
-    return ocr_image_paddleocr
+    return lambda image_path: ocr_image_paddleocr(image_path, cfg["paddleocr_enable_mkldnn"])
 
 
 # --- Orchestrateurs ------------------------------------------------------------
