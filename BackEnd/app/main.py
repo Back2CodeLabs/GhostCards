@@ -615,6 +615,9 @@ def get_parametres(request: Request):
         pronote_cfg = pronote_sync.config_pronote(conn)
         ocr_cfg = ocr.config_ocr(conn)
         verif_cfg = ia_verification.config_verif(conn)
+        matieres_exclues = db.get_parametre(
+            conn, "matieres_exclues", "Réunion parents-profs, Journée du sport scolaire"
+        )
     return {
         "ia_moteur": moteur if moteur in ("ollama", "gemini", "claude") else "ollama",
         "ollama_url": ollama_url or OLLAMA_URL,
@@ -637,9 +640,7 @@ def get_parametres(request: Request):
         "pronote_url": pronote_cfg["pronote_url"],
         "sync_days_back": pronote_cfg["sync_days_back"],
         "sync_days_forward": pronote_cfg["sync_days_forward"],
-        "matieres_exclues": db.get_parametre(
-            conn, "matieres_exclues", "Réunion parents-profs, Journée du sport scolaire"
-        ),
+        "matieres_exclues": matieres_exclues,
         "pronote_jeton_present": CREDENTIALS_PATH.exists(),
         "ocr_engine": ocr_cfg["moteur"],
         # Vérification (Services/ia_verification.py) : moteur indépendant de
