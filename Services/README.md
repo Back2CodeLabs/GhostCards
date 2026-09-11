@@ -122,6 +122,18 @@ si `sudo apt install poppler-utils` répond "déjà la version la plus
 récente" en SSH. Vérifie que ce `PATH` inclut bien `/usr/bin` en plus du
 `.venv/bin`, pas seulement le venv seul.
 
+**Piège vécu** : `NotImplementedError: (Unimplemented) ConvertPirAttribute
+2RuntimeAttribute not support [pir::ArrayAttribute<pir::DoubleAttribute>]`
+sur une transcription d'image — régression connue de `paddlepaddle` 3.3.x
+sur CPU avec l'accélération oneDNN (voir
+[PaddlePaddle/Paddle#77340](https://github.com/PaddlePaddle/Paddle/issues/77340)),
+pas propre à un document en particulier. Corrigé en désactivant oneDNN
+(`enable_mkldnn=False` dans `_paddleocr()`, `Services/ocr.py`) — un peu
+plus lent, mais fonctionne ; pas de correctif officiel de PaddlePaddle au
+moment de l'écriture. Les transcriptions déjà en échec pour cette raison
+ne se relancent pas toutes seules : bouton "Relancer" sur chacune depuis
+l'écran admin "Traitements".
+
 Chaque extraction/OCR est journalisée dans la table `traitements`, visible
 et relançable depuis l'écran "Traitements" du site (nav visible seulement
 en étant connecté en admin) — cet écran, comme "Paramétrage", est

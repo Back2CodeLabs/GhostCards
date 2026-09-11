@@ -195,6 +195,13 @@ def _paddleocr():
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,
+            # Régression connue de paddlepaddle 3.3.x sur CPU : l'accélération
+            # oneDNN plante à l'inférence sur certains modèles avec
+            # "NotImplementedError: ConvertPirAttribute2RuntimeAttribute not
+            # support [pir::ArrayAttribute<pir::DoubleAttribute>]" (voir
+            # PaddlePaddle/Paddle#77340). Désactivée : légèrement plus lent,
+            # mais fonctionne — pas de correctif officiel au moment de l'écriture.
+            enable_mkldnn=False,
         )
     return _paddleocr_instance
 
