@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { FileText, Download, LogIn, Paperclip, Sparkles, RefreshCw, Loader2, Ghost, GraduationCap, ShieldCheck } from "lucide-react";
+import { FileText, Download, LogIn, Paperclip, Sparkles, RefreshCw, Loader2, Ghost, GraduationCap, ShieldCheck, ChevronDown, ChevronUp, ExternalLink } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 import { API_BASE, useApi, messageErreur } from "../api";
 import { Loading, ApiError, ScreenHeader, AvertissementIA } from "../components/Shared";
@@ -28,6 +28,31 @@ function lireResultatExamen(coursId) {
   }
 }
 
+const EXTENSIONS_IMAGE = ["jpg", "jpeg", "png", "gif", "webp"];
+
+function extensionDe(nomFichier) {
+  const m = /\.([a-z0-9]+)$/i.exec(nomFichier || "");
+  return m ? m[1].toLowerCase() : "";
+}
+
+// Aperçu affiché directement dans la page (pas dans un nouvel onglet) :
+// une image s'affiche telle quelle, un PDF (ou tout le reste) part dans
+// un <iframe> — les deux pointent vers l'endpoint "apercu" du backend, qui
+// sert le fichier en Content-Disposition: inline pour que le navigateur
+// l'affiche au lieu de proposer un téléchargement.
+function ApercuFichier({ url, nomFichier, estImage, C }) {
+  const style = { display: "block", width: "100%", border: "none", borderRadius: 8 };
+  return (
+    <div style={{ marginTop: 10, background: C.paperDim, border: `1px solid ${C.line}`, borderRadius: 10, padding: 6 }}>
+      {estImage ? (
+        <img src={url} alt={nomFichier || "Aperçu"} style={{ ...style, maxHeight: 560, objectFit: "contain" }} />
+      ) : (
+        <iframe src={url} title={nomFichier || "Aperçu du document"} style={{ ...style, height: 560 }} />
+      )}
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /* Détail cours                                                         */
 /* ------------------------------------------------------------------ */
@@ -50,6 +75,10 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin, onOpenTraitem
   const [completing, setCompleting] = useState(false);
   const [completingError, setCompletingError] = useState(null);
   const [resumeDetaille, setResumeDetaille] = useState(false);
+  // Id du document/de la note dont l'aperçu est déplié dans la page (un
+  // seul à la fois par liste) — null si aucun n'est ouvert.
+  const [previewDocId, setPreviewDocId] = useState(null);
+  const [previewNoteId, setPreviewNoteId] = useState(null);
   // "off" (cours visible normalement) → "evaporating" (effet de
   // désintégration en cours, voir lib/disintegrate.js) → "active" (mode
   // examen affiché, cours masqué).
@@ -241,25 +270,51 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin, onOpenTraitem
           <p style={{ fontFamily: uiFont, fontSize: 13, color: C.inkFaint }}>Aucun document attaché à ce cours.</p>
         )}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {c.documents.map((d) => (
-            <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 10, background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "11px 14px" }}>
-              <a
-                href={d.url_externe || `${API_BASE}/api/documents/${d.id}/apercu`}
-                target="_blank"
-                rel="noreferrer"
-                title="Voir"
-                style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 10, textDecoration: "none" }}
-              >
-                <FileText size={16} color={C.haunt} style={{ flexShrink: 0 }} />
-                <span style={{ flex: 1, minWidth: 0, fontFamily: uiFont, fontSize: 13, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.nom_fichier}</span>
-              </a>
-              {!d.url_externe && (
-                <a href={`${API_BASE}/api/documents/${d.id}/fichier`} title="Télécharger" style={{ flexShrink: 0, display: "flex", color: C.inkFaint }}>
-                  <Download size={15} />
-                </a>
-              )}
-            </div>
-          ))}
+          {c.documents.map((d) => {
+            const ouvert = previewDocId === d.id;
+            return (
+              <div key={d.id} style={{ background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "11px 14px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  {d.url_externe ? (
+                    <a
+                      href={d.url_externe}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="Lien externe, pas hébergé ici : ouverture dans un nouvel onglet"
+                      style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 10, textDecoration: "none" }}
+                    >
+                      <FileText size={16} color={C.haunt} style={{ flexShrink: 0 }} />
+                      <span style={{ flex: 1, minWidth: 0, fontFamily: uiFont, fontSize: 13, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.nom_fichier}</span>
+                      <ExternalLink size={13} color={C.inkFaint} style={{ flexShrink: 0 }} />
+                    </a>
+                  ) : (
+                    <button
+                      onClick={() => setPreviewDocId(ouvert ? null : d.id)}
+                      title={ouvert ? "Masquer l'aperçu" : "Voir"}
+                      style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 10, background: "transparent", border: "none", padding: 0, cursor: "pointer", textAlign: "left", fontFamily: uiFont }}
+                    >
+                      <FileText size={16} color={C.haunt} style={{ flexShrink: 0 }} />
+                      <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.nom_fichier}</span>
+                      {ouvert ? <ChevronUp size={15} color={C.inkFaint} /> : <ChevronDown size={15} color={C.inkFaint} />}
+                    </button>
+                  )}
+                  {!d.url_externe && (
+                    <a href={`${API_BASE}/api/documents/${d.id}/fichier`} title="Télécharger" style={{ flexShrink: 0, display: "flex", color: C.inkFaint }}>
+                      <Download size={15} />
+                    </a>
+                  )}
+                </div>
+                {ouvert && !d.url_externe && (
+                  <ApercuFichier
+                    url={`${API_BASE}/api/documents/${d.id}/apercu`}
+                    nomFichier={d.nom_fichier}
+                    estImage={EXTENSIONS_IMAGE.includes(extensionDe(d.nom_fichier))}
+                    C={C}
+                  />
+                )}
+              </div>
+            );
+          })}
         </div>
 
         <p style={{ fontFamily: uiFont, fontSize: 11.5, fontWeight: 700, color: C.inkFaint, letterSpacing: 0.3, margin: "20px 0 8px" }}>
@@ -274,40 +329,50 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin, onOpenTraitem
           <p style={{ fontFamily: uiFont, fontSize: 13, color: C.inkFaint }}>Personne n'a encore partagé de notes pour ce cours.</p>
         )}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {c.notes.map((n) => (
-            <div key={n.id} style={{ background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "11px 14px" }}>
-              <div className="flex items-center justify-between">
-                <span style={{ fontFamily: uiFont, fontSize: 12.5, fontWeight: 700, color: C.haunt }}>{n.auteur}</span>
-                <div className="flex items-center gap-2">
-                  {n.type !== "texte" && n.type !== "markdown" && (
-                    <a
-                      href={`${API_BASE}/api/notes/${n.id}/apercu`}
-                      target="_blank"
-                      rel="noreferrer"
-                      title="Voir le fichier d'origine"
-                      style={{ display: "flex", color: C.inkFaint }}
-                    >
-                      <FileText size={14} />
-                    </a>
-                  )}
-                  <span style={{ fontFamily: uiFont, fontSize: 11, color: C.inkFaint }}>
-                    {new Date(n.created_at).toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}
-                  </span>
+          {c.notes.map((n) => {
+            const aUnFichier = n.type !== "texte" && n.type !== "markdown";
+            const ouvert = previewNoteId === n.id;
+            return (
+              <div key={n.id} style={{ background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "11px 14px" }}>
+                <div className="flex items-center justify-between">
+                  <span style={{ fontFamily: uiFont, fontSize: 12.5, fontWeight: 700, color: C.haunt }}>{n.auteur}</span>
+                  <div className="flex items-center gap-2">
+                    {aUnFichier && (
+                      <button
+                        onClick={() => setPreviewNoteId(ouvert ? null : n.id)}
+                        title={ouvert ? "Masquer l'aperçu" : "Voir le fichier d'origine"}
+                        style={{ display: "flex", alignItems: "center", background: "transparent", border: "none", padding: 0, color: C.inkFaint, cursor: "pointer" }}
+                      >
+                        {ouvert ? <ChevronUp size={14} /> : <FileText size={14} />}
+                      </button>
+                    )}
+                    <span style={{ fontFamily: uiFont, fontSize: 11, color: C.inkFaint }}>
+                      {new Date(n.created_at).toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}
+                    </span>
+                  </div>
                 </div>
+                {n.statut === "traitement" && (
+                  <p style={{ fontFamily: uiFont, fontSize: 13, color: C.inkFaint, margin: "4px 0 0", display: "flex", alignItems: "center", gap: 6 }}>
+                    <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> Transcription en cours…
+                  </p>
+                )}
+                {n.statut === "echec" && (
+                  <p style={{ fontFamily: uiFont, fontSize: 13, color: C.brick, margin: "4px 0 0" }}>Échec de la transcription de ce document.</p>
+                )}
+                {(n.statut === "pret" || !n.statut) && (
+                  <p style={{ fontFamily: uiFont, fontSize: 13.5, color: C.ink, margin: "4px 0 0", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{n.contenu}</p>
+                )}
+                {ouvert && (
+                  <ApercuFichier
+                    url={`${API_BASE}/api/notes/${n.id}/apercu`}
+                    nomFichier={`Note de ${n.auteur}`}
+                    estImage={n.type === "photo"}
+                    C={C}
+                  />
+                )}
               </div>
-              {n.statut === "traitement" && (
-                <p style={{ fontFamily: uiFont, fontSize: 13, color: C.inkFaint, margin: "4px 0 0", display: "flex", alignItems: "center", gap: 6 }}>
-                  <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> Transcription en cours…
-                </p>
-              )}
-              {n.statut === "echec" && (
-                <p style={{ fontFamily: uiFont, fontSize: 13, color: C.brick, margin: "4px 0 0" }}>Échec de la transcription de ce document.</p>
-              )}
-              {(n.statut === "pret" || !n.statut) && (
-                <p style={{ fontFamily: uiFont, fontSize: 13.5, color: C.ink, margin: "4px 0 0", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{n.contenu}</p>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         {me?.eleve ? (
