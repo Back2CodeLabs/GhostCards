@@ -20,6 +20,24 @@ const NUM_FRAMES = 40;
 const REPETITION_COUNT = 2; // chaque pixel est assigné à 2 fragments
 const STAGGER_S = 1.35; // étalement du déclenchement entre le 1er et le dernier fragment
 const TRANSITION_S = 1; // durée d'envol/fondu de chaque fragment une fois déclenché
+const TIMEOUT_MS = 4000; // si html2canvas ne répond pas (mobile sous-puissant...), on abandonne l'effet plutôt que de bloquer indéfiniment le passage au mode examen
+
+// Firefox (constaté sur Android) rend `getImageData` vide/transparent si
+// le canvas produit par html2canvas n'a jamais été posé dans le DOM —
+// bug connu d'html2canvas sur Firefox (niklasvh/html2canvas#2254), Chrome
+// n'a pas ce problème. On le colle donc brièvement hors champ (pas en
+// `display:none`, qui déclenche le même bug que ne pas l'ajouter du tout)
+// le temps de lire ses pixels, puis on le retire aussitôt.
+function lireImageData(sourceCanvas) {
+  const { width, height } = sourceCanvas;
+  sourceCanvas.style.cssText = "position:fixed; left:-99999px; top:0; opacity:0; pointer-events:none;";
+  document.body.appendChild(sourceCanvas);
+  try {
+    return sourceCanvas.getContext("2d").getImageData(0, 0, width, height);
+  } finally {
+    sourceCanvas.remove();
+  }
+}
 
 // Découpe le canvas source en `count` fragments : chaque pixel est
 // assigné aléatoirement à l'un d'eux, mais avec un biais sur sa position
@@ -29,7 +47,7 @@ const TRANSITION_S = 1; // durée d'envol/fondu de chaque fragment une fois déc
 function decouperEnFragments(sourceCanvas, count) {
   const { width, height } = sourceCanvas;
   const ctx = sourceCanvas.getContext("2d");
-  const original = ctx.getImageData(0, 0, width, height);
+  const original = lireImageData(sourceCanvas);
   const imageDatas = Array.from({ length: count }, () => ctx.createImageData(width, height));
 
   for (let x = 0; x < width; x++) {
@@ -76,7 +94,10 @@ export async function disintegrate(element, { onDone, backgroundColor = null } =
   let sourceCanvas;
   try {
     const rect = element.getBoundingClientRect();
-    sourceCanvas = await html2canvas(element, { backgroundColor, scale: window.devicePixelRatio || 1 });
+    sourceCanvas = await Promise.race([
+      html2canvas(element, { backgroundColor, scale: window.devicePixelRatio || 1 }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("html2canvas timeout")), TIMEOUT_MS)),
+    ]);
 
     const overlay = document.createElement("div");
     overlay.style.cssText = `position:fixed; left:${rect.left}px; top:${rect.top}px; width:${rect.width}px; height:${rect.height}px; pointer-events:none; z-index:9999; overflow:visible;`;
