@@ -322,7 +322,7 @@ export function ParametresScreen() {
                   key={m.id}
                   style={{ display: "flex", gap: 10, alignItems: "flex-start", background: C.paperDim, border: `1px solid ${moteur === m.id ? C.haunt : C.line}`, borderRadius: 10, padding: "12px 14px", cursor: "pointer" }}
                 >
-                  <input type="radio" checked={moteur === m.id} onChange={() => setMoteur(m.id)} style={{ marginTop: 3 }} />
+                  <input type="radio" checked={moteur === m.id} onChange={() => setMoteur(m.id)} style={{ marginTop: 3, accentColor: C.haunt }} />
                   <div>
                     <div style={{ fontFamily: uiFont, fontSize: 13.5, fontWeight: 700, color: C.ink }}>{m.nom}</div>
                     <div style={{ fontFamily: uiFont, fontSize: 12, color: C.inkSoft, marginTop: 2 }}>{m.desc}</div>
@@ -493,7 +493,7 @@ export function ParametresScreen() {
                   key={m.id}
                   style={{ display: "flex", gap: 10, alignItems: "flex-start", background: C.paperDim, border: `1px solid ${ocrEngine === m.id ? C.haunt : C.line}`, borderRadius: 10, padding: "12px 14px", cursor: "pointer" }}
                 >
-                  <input type="radio" checked={ocrEngine === m.id} onChange={() => setOcrEngine(m.id)} style={{ marginTop: 3 }} />
+                  <input type="radio" checked={ocrEngine === m.id} onChange={() => setOcrEngine(m.id)} style={{ marginTop: 3, accentColor: C.haunt }} />
                   <div>
                     <div style={{ fontFamily: uiFont, fontSize: 13.5, fontWeight: 700, color: C.ink }}>{m.nom}</div>
                     <div style={{ fontFamily: uiFont, fontSize: 12, color: C.inkSoft, marginTop: 2 }}>{m.desc}</div>
@@ -524,7 +524,7 @@ export function ParametresScreen() {
                     type="checkbox"
                     checked={paddleocrEnableMkldnn}
                     onChange={(e) => setPaddleocrEnableMkldnn(e.target.checked)}
-                    style={{ marginTop: 3 }}
+                    style={{ marginTop: 3, accentColor: C.haunt }}
                   />
                   <div>
                     <div style={{ fontFamily: uiFont, fontSize: 13.5, fontWeight: 700, color: C.ink }}>Accélération oneDNN (CPU)</div>
@@ -560,7 +560,7 @@ export function ParametresScreen() {
                   key={m.id}
                   style={{ display: "flex", gap: 10, alignItems: "flex-start", background: C.paperDim, border: `1px solid ${verifMoteur === m.id ? C.haunt : C.line}`, borderRadius: 10, padding: "12px 14px", cursor: "pointer" }}
                 >
-                  <input type="radio" checked={verifMoteur === m.id} onChange={() => setVerifMoteur(m.id)} style={{ marginTop: 3 }} />
+                  <input type="radio" checked={verifMoteur === m.id} onChange={() => setVerifMoteur(m.id)} style={{ marginTop: 3, accentColor: C.haunt }} />
                   <div>
                     <div style={{ fontFamily: uiFont, fontSize: 13.5, fontWeight: 700, color: C.ink }}>{m.nom}</div>
                     <div style={{ fontFamily: uiFont, fontSize: 12, color: C.inkSoft, marginTop: 2 }}>{m.desc}</div>
