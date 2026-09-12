@@ -5,7 +5,21 @@ Numéro de version affiché dans l'app (voir `FrontEnd/package.json`, injecté
 via `vite.config.js`) — à incrémenter à chaque publication sur l'OptiPlex,
 avec une nouvelle entrée ici.
 
-## [0.3.0] — en cours
+## [0.3.1] — en cours
+
+### Fixed
+- Le pairage Pronote échouait ("Aucun QR code détecté") sur une vraie
+  photo prise au téléphone (fonctionnait seulement avec une capture
+  d'écran) : `cv2.QRCodeDetector` s'est montré très sensible à la
+  résolution d'entrée sur une photo réelle. Réessaie maintenant plusieurs
+  tailles avant d'abandonner.
+
+### Added
+- Filet de secours sur l'écran de connexion : "Coller le code à la
+  place" pour saisir directement le JSON du QR code si l'upload d'image
+  ne suffit toujours pas.
+
+## [0.3.0] — 2026-09-12
 
 ### Added
 - Consentement explicite avant le pairage Pronote d'un élève : liste
