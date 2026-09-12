@@ -489,6 +489,13 @@ déprécié.
   toute nouvelle colonne sur une table existante doit passer par le
   helper `_ensure_column` dans `Services/db.py`, pas juste être ajoutée
   au `CREATE TABLE` dans `schema.sql`.
+- `.env` édité à la main sur l'OptiPlex avec un octet non-UTF-8 (accent
+  collé/tapé via un éditeur en Windows-1252/Latin-1) → `load_dotenv()`
+  plante au démarrage (`UnicodeDecodeError`, service en échec immédiat,
+  aucun rapport avec le code déployé). Repérer la ligne fautive avec
+  `grep -n -P '[\x80-\xFF]' BackEnd/.env`, puis reconvertir tout le
+  fichier : `iconv -f WINDOWS-1252 -t UTF-8 BackEnd/.env -o /tmp/env.utf8
+  && mv /tmp/env.utf8 BackEnd/.env`.
 
 ## Conventions établies pendant la session
 
