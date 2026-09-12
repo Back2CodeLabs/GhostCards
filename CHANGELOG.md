@@ -5,7 +5,15 @@ Numéro de version affiché dans l'app (voir `FrontEnd/package.json`, injecté
 via `vite.config.js`) — à incrémenter à chaque publication sur l'OptiPlex,
 avec une nouvelle entrée ici.
 
-## [0.3.2] — en cours
+## [0.3.3] — en cours
+
+### Fixed
+- `BackEnd/deploy/Caddyfile` échouait à démarrer sur l'OptiPlex :
+  `tailscale serve` occupe déjà le port 443 sur l'interface Tailscale
+  pour un autre usage. Caddy est désormais restreint (`bind`) à l'IP
+  réseau locale de l'OptiPlex, sans toucher à la config Tailscale.
+
+## [0.3.2] — 2026-09-12
 
 ### Added
 - `BackEnd/deploy/Caddyfile` + procédure documentée (`Services/README.md`)
