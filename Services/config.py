@@ -41,6 +41,14 @@ CREDENTIALS_PATH = Path(os.environ.get("CREDENTIALS_PATH", BASE_DIR / "secrets" 
 #   python3 -c "import secrets; print(secrets.token_hex(32))"
 SESSION_SECRET_KEY = os.environ.get("SESSION_SECRET_KEY", "")
 
+# Cookie de session marqué "Secure" (jamais renvoyé par le navigateur en
+# dehors d'HTTPS) — à activer (true) une fois un reverse proxy HTTPS en
+# place devant l'app (voir BackEnd/deploy/Caddyfile), pas avant : sinon la
+# session ne survivrait plus à un accès de diagnostic en HTTP simple (ex.
+# tunnel SSH vers localhost:8000, voir Services/README.md). Faux par
+# défaut pour ne rien casser tant que ce n'est pas fait.
+SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").strip().lower() == "true"
+
 # Clé de chiffrement (Fernet) des jetons Pronote stockés par élève (voir
 # Services/crypto_secrets.py) — accès direct au compte scolaire réel d'un
 # mineur, sensibilité bien supérieure au `credentials.json` unique de

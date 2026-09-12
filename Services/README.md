@@ -245,3 +245,50 @@ avec une erreur claire plutôt que de stocker les jetons en clair.
 lien Pronote cassé ou non), et un bouton "Re-pairer" qui efface le jeton
 stocké — l'élève reprendra le flux de connexion (upload QR + PIN) à sa
 prochaine visite.
+
+## Exposer le site hors du réseau local (HTTPS)
+
+Une fois un nom de domaine acheté et pointé vers l'IP publique de ta box
+(ex. `ghostschool.app`), avec le port **80** de la box redirigé vers le
+port 8000 de l'OptiPlex, le site est déjà joignable depuis Internet — mais
+en HTTP simple, ce qui veut dire que le QR code Pronote, le code PIN, et
+le cookie de session de chaque élève circulent en clair sur le réseau.
+Vu qu'il s'agit d'un accès direct à de vraies données scolaires de
+mineurs, mets HTTPS en place avant que d'autres élèves ne se connectent
+depuis l'extérieur de ton réseau local.
+
+**Étapes** :
+
+1. Redirige aussi le port **443** de ta box vers l'OptiPlex (en plus du
+   80 déjà fait — Caddy a besoin des deux : 80 pour le défi ACME/la
+   redirection vers HTTPS, 443 pour le trafic HTTPS lui-même).
+2. Installe Caddy (dépôt officiel, Debian/Ubuntu) :
+   ```bash
+   sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+   sudo apt update && sudo apt install caddy
+   ```
+3. Copie `BackEnd/deploy/Caddyfile` vers `/etc/caddy/Caddyfile` (adapte le
+   nom de domaine s'il diffère de `ghostschool.app`), puis :
+   ```bash
+   sudo cp BackEnd/deploy/Caddyfile /etc/caddy/Caddyfile
+   sudo systemctl enable --now caddy
+   sudo systemctl restart caddy
+   sudo systemctl status caddy --no-pager -l
+   ```
+   Caddy obtient et renouvelle ensuite tout seul le certificat Let's
+   Encrypt — rien d'autre à faire tant que le domaine continue de pointer
+   vers cette IP.
+4. Une fois `https://ghostschool.app` confirmé fonctionnel, ajoute dans
+   `.env` :
+   ```
+   SESSION_COOKIE_SECURE=true
+   ```
+   puis `sudo systemctl restart ghostcards.service`. Sans cette étape,
+   les cookies de session restent utilisables même en HTTP (pratique
+   pendant la mise en place, mais à ne pas laisser en l'état une fois
+   HTTPS confirmé). **Effet de bord à connaître** : une fois activé, un
+   accès de diagnostic en HTTP simple (ex. tunnel SSH vers
+   `localhost:8000`) ne garde plus la session d'une requête à l'autre —
+   utilise `https://ghostschool.app` même pour l'administration.

@@ -439,9 +439,14 @@ déprécié.
 
 ## État — pas commencé
 
-- **Exposition hors LAN** (nom de domaine + HTTPS + reverse proxy) —
-  nécessaire pour que la connexion Google fonctionne pour les élèves
-  depuis chez eux. Voir `Services/README.md`.
+- ~~**Exposition hors LAN**~~ — en cours (2026-09-12) : domaine
+  `ghostschool.app` acheté et pointé vers l'IP publique, port 80 redirigé
+  vers l'OptiPlex, site déjà joignable en HTTP. Reste à faire : rediriger
+  aussi le port 443 et mettre en place Caddy (voir
+  `Services/README.md`, section "Exposer le site hors du réseau local",
+  et `BackEnd/deploy/Caddyfile`) avant que d'autres élèves ne s'y
+  connectent depuis chez eux — le PIN/QR Pronote et les cookies de
+  session circulent en clair tant que ce n'est pas fait.
 - Export flashcards compatible Anki (mentionné dans le cahier des charges
   d'origine, jamais abordé).
 - Espace enseignant (explicitement hors scope v1 dans le cahier des

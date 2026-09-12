@@ -1,0 +1,10 @@
+# Reverse proxy HTTPS devant Ghost School — voir Services/README.md,
+# section "Exposer le site hors du réseau local", pour l'installation.
+# Caddy obtient et renouvelle automatiquement un certificat Let's Encrypt
+# pour ce domaine (nécessite que ghostschool.app pointe vers cette
+# machine, et que les ports 80 ET 443 de la box soient redirigés vers
+# elle — 80 sert au défi ACME/à la redirection HTTP->HTTPS, 443 au trafic
+# HTTPS lui-même).
+ghostschool.app {
+    reverse_proxy localhost:8000
+}

@@ -38,6 +38,7 @@ from Services import crypto_secrets, db, ia_generation, ia_verification, ocr, pr
 from Services.config import (  # noqa: E402
     DOCUMENTS_DIR,
     SESSION_SECRET_KEY,
+    SESSION_COOKIE_SECURE,
     CLASSE_ATTENDUE,
     ADMIN_PASSWORD,
     IA_ENGINE,
@@ -67,7 +68,11 @@ app.add_middleware(
     SessionMiddleware,
     secret_key=SESSION_SECRET_KEY or "cle-temporaire-a-remplacer-dans-.env",
     same_site="lax",
-    https_only=False,  # déploiement en HTTP simple sur le réseau local pour l'instant
+    # Marque le cookie "Secure" une fois un reverse proxy HTTPS en place
+    # (voir BackEnd/deploy/Caddyfile, SESSION_COOKIE_SECURE=true dans .env)
+    # — pas avant, sinon la session ne survivrait plus à un accès de
+    # diagnostic en HTTP simple (tunnel SSH vers localhost:8000).
+    https_only=SESSION_COOKIE_SECURE,
 )
 
 # Le frontend (React) tourne sur un port différent en développement.
