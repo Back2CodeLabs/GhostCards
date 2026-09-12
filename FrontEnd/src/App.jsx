@@ -65,10 +65,16 @@ export default function App() {
   }
 
   const isAdmin = me.isAdmin;
+  const estConnecte = !!me.eleve || isAdmin;
   const top = stack[stack.length - 1];
 
   let content;
-  if (top?.screen === "subject") {
+  if (!me.loading && !estConnecte && top?.screen !== "admin-login") {
+    // Site verrouillé aux élèves pairés (Pronote) et à l'admin — voir
+    // BackEnd/app/main.py::_require_session. L'accès admin (mot de passe,
+    // bouton bouclier dans l'en-tête) reste joignable même non connecté.
+    content = <LoginScreen me={me} />;
+  } else if (top?.screen === "subject") {
     content = <SubjectDetail subjectId={top.params.id} subjectName={top.params.nom} onBack={pop} onOpenCours={openCours} />;
   } else if (top?.screen === "cours") {
     content = <CoursDetail coursId={top.params.id} onBack={pop} me={me} onRequireLogin={requireLogin} onOpenTraitement={openTraitement} />;
@@ -120,6 +126,12 @@ export default function App() {
                 ))}
                 {" School"}
               </span>
+              <span
+                title="Version de Ghost School"
+                style={{ fontFamily: uiFont, fontSize: 10, fontWeight: 700, color: C.inkFaint, border: `1px solid ${C.line}`, borderRadius: 999, padding: "1px 6px" }}
+              >
+                v{__APP_VERSION__}
+              </span>
             </div>
             <div className="flex items-center gap-2">
               <AuthControl me={me} onLogin={requireLogin} />
@@ -135,7 +147,7 @@ export default function App() {
           </div>
 
           <div className="gc-shell">
-            <Nav tab={tab} setTab={switchTab} isAdmin={isAdmin} />
+            {estConnecte && <Nav tab={tab} setTab={switchTab} isAdmin={isAdmin} />}
             <main className="gc-main">
               <div className="gc-content">{content}</div>
             </main>

@@ -1,18 +1,21 @@
 import { useState } from "react";
-import { Users, Sparkles } from "lucide-react";
+import { Users, Sparkles, RotateCcw, XCircle } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
-import { API_BASE, useApi } from "../api";
+import { API_BASE, useApi, messageErreur } from "../api";
 import { Loading, ApiError, EmptyState } from "../components/Shared";
 
 /* ------------------------------------------------------------------ */
-/* Élèves — liste admin (comptes Google ayant déjà déposé une note ou    */
-/* consulté le site connectés). Jamais visible des élèves eux-mêmes.     */
+/* Élèves — liste admin (comptes pairés avec leur propre Pronote, voir  */
+/* BackEnd/app/main.py::pairer_eleve_pronote). Jamais visible des        */
+/* élèves eux-mêmes.                                                    */
 /* ------------------------------------------------------------------ */
 
 export function ElevesScreen() {
   const { C } = useTheme();
   const eleves = useApi("/api/eleves");
   const [togglingId, setTogglingId] = useState(null);
+  const [reinitId, setReinitId] = useState(null);
+  const [reinitError, setReinitError] = useState(null);
 
   async function toggleAssistant(eleve) {
     setTogglingId(eleve.id);
@@ -28,13 +31,32 @@ export function ElevesScreen() {
     }
   }
 
+  async function forcerRepairage(eleve) {
+    setReinitId(eleve.id);
+    setReinitError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/eleves/${eleve.id}/reinitialiser-pronote`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Erreur ${res.status}`);
+      }
+      eleves.reload();
+    } catch (e) {
+      setReinitError(messageErreur(e, "Impossible de réinitialiser ce compte."));
+    } finally {
+      setReinitId(null);
+    }
+  }
+
   return (
     <div>
       <div style={{ padding: "20px 20px 4px" }}>
         <h1 style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 24, color: C.ink, margin: 0 }}>Élèves</h1>
         <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: "4px 0 0" }}>
-          Comptes Google connectés au moins une fois. L'assistant IA est désactivé par défaut pour chacun.
+          Comptes pairés avec leur propre Pronote (au moins une connexion). L'assistant IA est
+          désactivé par défaut pour chacun.
         </p>
+        {reinitError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "8px 0 0" }}>{reinitError}</p>}
       </div>
       <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
         {eleves.loading && <Loading />}
@@ -53,7 +75,15 @@ export function ElevesScreen() {
             )}
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 13.5, color: C.ink, fontWeight: 600 }}>{e.nom}</div>
-              <div style={{ fontSize: 12, color: C.inkSoft, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.email}</div>
+              <div style={{ fontSize: 12, color: C.inkSoft, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {e.pronote_class_name || "classe inconnue"}
+                {e.pronote_sync_statut === "echec" && (
+                  <span style={{ color: C.brick, marginLeft: 6 }} title={e.pronote_sync_erreur || ""}>
+                    <XCircle size={11} style={{ display: "inline", verticalAlign: -1, marginRight: 3 }} />
+                    lien Pronote cassé
+                  </span>
+                )}
+              </div>
             </div>
             <div style={{ textAlign: "right", flexShrink: 0 }}>
               <div style={{ fontSize: 12, color: C.inkSoft }}>{e.nb_notes} note{e.nb_notes === 1 ? "" : "s"}</div>
@@ -75,6 +105,19 @@ export function ElevesScreen() {
               }}
             >
               <Sparkles size={12} /> {e.assistant_actif ? "Assistant ON" : "Assistant OFF"}
+            </button>
+            <button
+              onClick={() => forcerRepairage(e)}
+              disabled={reinitId === e.id}
+              title="Forcer un nouveau pairage Pronote (à utiliser si le lien est cassé)"
+              style={{
+                display: "flex", alignItems: "center", gap: 5, flexShrink: 0,
+                background: "transparent", border: `1px solid ${C.line}`, borderRadius: 999,
+                padding: "5px 10px", fontFamily: uiFont, fontSize: 11, fontWeight: 700, color: C.inkFaint,
+                cursor: reinitId === e.id ? "default" : "pointer", opacity: reinitId === e.id ? 0.6 : 1,
+              }}
+            >
+              <RotateCcw size={12} /> Re-pairer
             </button>
           </div>
         ))}

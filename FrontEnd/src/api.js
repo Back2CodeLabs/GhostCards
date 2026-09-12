@@ -63,8 +63,8 @@ export function useApi(path, deps = []) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Identité de l'élève connecté (Google) — sert uniquement à attribuer  */
-/* les notes déposées ; la consultation du site reste libre.            */
+/* Identité de l'élève connecté (pairage Pronote) — verrouille tout le  */
+/* site : voir BackEnd/app/main.py::_require_session.                   */
 /* ------------------------------------------------------------------ */
 
 export function useMe() {
@@ -86,8 +86,24 @@ export function useMe() {
     setState((s) => ({ ...s, eleve: null }));
   }
 
+  // Pairage Pronote : upload de la capture d'écran du QR code + le PIN à
+  // 4 chiffres (voir BackEnd/app/main.py::pairer_eleve_pronote).
+  async function pairerPronote(fichierQr, pin) {
+    const form = new FormData();
+    form.append("qr", fichierQr);
+    form.append("pin", pin);
+    const res = await fetch(`${API_BASE}/api/eleves/pairage`, { method: "POST", body: form });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Erreur ${res.status}`);
+    }
+    const data = await res.json();
+    await load();
+    return data;
+  }
+
   // Connexion admin : mot de passe séparé, totalement indépendant des
-  // comptes élèves (Google) — voir Services/config.py::ADMIN_PASSWORD.
+  // comptes élèves (Pronote) — voir Services/config.py::ADMIN_PASSWORD.
   async function adminLogin(password) {
     const res = await fetch(`${API_BASE}/auth/admin-login`, {
       method: "POST",
@@ -106,5 +122,5 @@ export function useMe() {
     setState((s) => ({ ...s, isAdmin: false }));
   }
 
-  return { ...state, reload: load, logout, adminLogin, adminLogout };
+  return { ...state, reload: load, logout, pairerPronote, adminLogin, adminLogout };
 }

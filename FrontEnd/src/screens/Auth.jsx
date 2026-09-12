@@ -1,35 +1,97 @@
-import { useState } from "react";
-import { Ghost, LogIn, ShieldCheck } from "lucide-react";
+import { useState, useRef } from "react";
+import { Ghost, Upload, ShieldCheck } from "lucide-react";
 import { useTheme, uiFont, glowText } from "../theme";
-import { API_BASE, messageErreur } from "../api";
+import { messageErreur } from "../api";
 import { ScreenHeader } from "../components/Shared";
 
 /* ------------------------------------------------------------------ */
-/* Connexion (Google) — sert uniquement à identifier qui dépose une     */
-/* note ; le reste du site reste consultable sans compte.               */
+/* Connexion — pairage avec le compte Pronote personnel de l'élève :     */
+/* vérifie l'établissement et la classe, et sert de source de synchro   */
+/* pour son propre groupe (voir BackEnd/app/main.py::pairer_eleve_       */
+/* pronote). Verrouille tout le site : plus de consultation sans compte.*/
 /* ------------------------------------------------------------------ */
 
-export function LoginScreen({ onBack }) {
+export function LoginScreen({ me }) {
   const { C } = useTheme();
+  const [fichier, setFichier] = useState(null);
+  const [pin, setPin] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+  const fileInputRef = useRef(null);
+
+  async function submit() {
+    if (!fichier || pin.length !== 4 || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await me.pairerPronote(fichier, pin);
+    } catch (e) {
+      setError(messageErreur(e, "Pairage Pronote impossible."));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <div>
-      <ScreenHeader title="Connexion" onBack={onBack} />
-      <div style={{ padding: "48px 28px", textAlign: "center" }}>
+      <ScreenHeader title="Connexion" />
+      <div style={{ padding: "40px 28px", textAlign: "center" }}>
         <Ghost size={38} color={C.haunt} strokeWidth={1.4} style={{ marginBottom: 16, ...glowText(C, C.haunt) }} />
         <h2 style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 20, color: C.ink, margin: "0 0 10px" }}>
-          Connecte-toi pour participer
+          Rejoins Ghost School avec Pronote
         </h2>
-        <p style={{ fontFamily: uiFont, fontSize: 13.5, color: C.inkSoft, lineHeight: 1.6, margin: "0 0 26px", maxWidth: 340, marginLeft: "auto", marginRight: "auto" }}>
-          La connexion sert uniquement à savoir qui a déposé quelle note, pour
-          que la classe sache d'où vient chaque contribution. Consulter les
-          cours, résumés et quiz reste libre, sans compte.
+        <p style={{ fontFamily: uiFont, fontSize: 13.5, color: C.inkSoft, lineHeight: 1.6, margin: "0 0 20px", maxWidth: 360, marginLeft: "auto", marginRight: "auto" }}>
+          Ghost School est réservé à ta classe. Sur Pronote (ordinateur ou
+          téléphone), va dans <b>Mon compte → Configuration de mon compte →
+          Connexion via smartphone</b> : ça affiche un QR code et un code PIN
+          à 4 chiffres. Prends une capture d'écran du QR code et dépose-la
+          ici avec le PIN — une seule fois, ensuite tu resteras connecté sur
+          cet appareil.
         </p>
-        <a
-          href={`${API_BASE}/auth/login`}
-          style={{ display: "inline-flex", alignItems: "center", gap: 9, background: C.haunt, color: C.onAccent, borderRadius: 10, padding: "12px 22px", fontFamily: uiFont, fontSize: 14, fontWeight: 700, textDecoration: "none" }}
+
+        <div
+          onClick={() => fileInputRef.current?.click()}
+          style={{ cursor: "pointer", background: C.paperDim, border: `1px dashed ${C.line}`, borderRadius: 12, padding: "22px 16px", marginBottom: 14, maxWidth: 340, marginLeft: "auto", marginRight: "auto" }}
         >
-          <LogIn size={16} /> Continuer avec Google
-        </a>
+          <Upload size={22} color={C.inkSoft} style={{ marginBottom: 6 }} />
+          <p style={{ fontFamily: uiFont, fontSize: 13, color: C.ink, margin: 0, fontWeight: 600 }}>
+            {fichier ? fichier.name : "Choisir la capture du QR code"}
+          </p>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            onChange={(e) => setFichier(e.target.files?.[0] || null)}
+            style={{ display: "none" }}
+          />
+        </div>
+
+        <input
+          type="text"
+          inputMode="numeric"
+          maxLength={4}
+          value={pin}
+          onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+          placeholder="Code PIN (4 chiffres)"
+          style={{ width: "100%", maxWidth: 260, background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "10px 14px", fontFamily: uiFont, fontSize: 16, letterSpacing: 4, color: C.ink, outline: "none", textAlign: "center" }}
+        />
+
+        {error && <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.brick, margin: "10px 0 0", maxWidth: 340, marginLeft: "auto", marginRight: "auto" }}>{error}</p>}
+
+        <div>
+          <button
+            onClick={submit}
+            disabled={submitting || !fichier || pin.length !== 4}
+            style={{ marginTop: 18, background: C.haunt, color: C.onAccent, border: "none", borderRadius: 10, padding: "11px 24px", fontFamily: uiFont, fontSize: 14, fontWeight: 700, cursor: fichier && pin.length === 4 ? "pointer" : "default", opacity: submitting ? 0.7 : 1 }}
+          >
+            {submitting ? "Connexion…" : "Se connecter"}
+          </button>
+        </div>
+
+        <p style={{ fontFamily: uiFont, fontSize: 11.5, color: C.inkFaint, marginTop: 22 }}>
+          Le QR code n'est valable que quelques minutes — régénère-le sur Pronote s'il a expiré.
+        </p>
       </div>
     </div>
   );

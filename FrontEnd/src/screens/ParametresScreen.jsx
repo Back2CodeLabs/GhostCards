@@ -85,6 +85,7 @@ export function ParametresScreen() {
   const [syncDaysBack, setSyncDaysBack] = useState("");
   const [syncDaysForward, setSyncDaysForward] = useState("");
   const [matieresExclues, setMatieresExclues] = useState("");
+  const [classeAttendue, setClasseAttendue] = useState("");
   const [ocrEngine, setOcrEngine] = useState("paddleocr");
   const [paddleocrEnableMkldnn, setPaddleocrEnableMkldnn] = useState(false);
   const [verifMoteur, setVerifMoteur] = useState("claude");
@@ -112,6 +113,7 @@ export function ParametresScreen() {
       setSyncDaysBack(String(parametres.data.sync_days_back ?? ""));
       setSyncDaysForward(String(parametres.data.sync_days_forward ?? ""));
       setMatieresExclues(parametres.data.matieres_exclues || "");
+      setClasseAttendue(parametres.data.classe_attendue || "");
       setOcrEngine(parametres.data.ocr_engine || "paddleocr");
       setPaddleocrEnableMkldnn(parametres.data.paddleocr_enable_mkldnn ?? false);
       setVerifMoteur(parametres.data.verif_moteur || "claude");
@@ -170,6 +172,7 @@ export function ParametresScreen() {
         sync_days_back: syncDaysBack.trim() ? parseInt(syncDaysBack, 10) : null,
         sync_days_forward: syncDaysForward.trim() ? parseInt(syncDaysForward, 10) : null,
         matieres_exclues: matieresExclues,
+        classe_attendue: classeAttendue,
         ocr_engine: ocrEngine,
         paddleocr_enable_mkldnn: paddleocrEnableMkldnn,
         verif_moteur: verifMoteur,
@@ -303,6 +306,20 @@ export function ParametresScreen() {
                   Noms séparés par des virgules, tels qu'affichés dans Pronote (accents/majuscules sans
                   importance). Certains créneaux ne sont pas de vraies matières (réunions, journées
                   spéciales...) — ceux listés ici ne seront plus importés à la prochaine synchronisation.
+                </p>
+              </div>
+              <div>
+                <label style={labelStyle}>CLASSE ATTENDUE</label>
+                <input
+                  value={classeAttendue}
+                  onChange={(e) => setClasseAttendue(e.target.value)}
+                  placeholder="2F"
+                  style={inputStyle}
+                />
+                <p style={{ fontFamily: uiFont, fontSize: 11.5, color: C.inkFaint, margin: "4px 0 0" }}>
+                  Vérifiée au pairage Pronote d'un élève (voir <code>ClientInfo.class_name</code>) — un
+                  élève d'une autre classe ne peut pas se connecter à Ghost School. Vide = aucune
+                  vérification (seul l'établissement compte).
                 </p>
               </div>
             </div>
