@@ -188,71 +188,60 @@ au modèle sur un cours long.
 à activer au cas par cas depuis l'écran admin "Élèves" (bouton bascule).
 L'admin y a toujours accès.
 
-## Authentification élève (Google)
+## Authentification élève (pairage Pronote)
 
-Sert uniquement à savoir **qui** dépose une prise de notes (section 8 du
-cahier des charges) : consulter les cours, résumés, flashcards et quiz reste
-entièrement libre, sans connexion. Seul le dépôt d'une note nécessite d'être
-connecté.
+Le site est **verrouillé** : consulter quoi que ce soit (cours, résumés,
+flashcards, quiz) nécessite d'être connecté — élève de la classe, ou admin.
+Chaque élève se connecte avec **son propre compte Pronote**, jamais avec un
+compte Google : ça vérifie à la fois qu'il s'agit du bon établissement et de
+la bonne classe, et ça permet à la synchro de récupérer SON groupe (LV2,
+options...) en plus de celui de l'admin (voir plus haut, "Points d'attention
+sur le fonctionnement de Pronote" dans `Services/pronote_sync.py`).
 
-### ⚠️ Limitation importante : HTTPS et nom de domaine
+Contrairement à l'ancienne connexion Google, **aucune contrainte HTTPS/nom
+de domaine** : le pairage est un simple envoi de formulaire au serveur, pas
+une redirection OAuth externe — fonctionne aussi bien en HTTP simple sur le
+réseau local. (Exposer le site à des élèves connectant depuis chez eux reste
+une question à part, réseau/HTTPS, indépendante de l'authentification —
+voir plus bas si besoin.)
 
-Google n'autorise les URL de redirection OAuth qu'en HTTPS, à une exception
-près : `http://localhost` est toléré pour développer en local. Une adresse
-IP de réseau local (`http://192.168.1.117:8000`) n'est **pas** acceptée.
+### Comment un élève se connecte
 
-Concrètement :
-- **Toi, sur l'OptiPlex lui-même** (ou en te connectant en SSH avec un tunnel
-  vers `localhost:8000`) : ça fonctionne dès maintenant, en laissant
-  `BASE_URL=http://localhost:8000`.
-- **Tes camarades, depuis chez eux** : il faudra un nom de domaine pointant
-  vers ton réseau (DNS dynamique si tu n'as pas d'IP fixe), un certificat
-  HTTPS (ex. via un reverse proxy comme Caddy, qui gère Let's Encrypt
-  automatiquement), et une redirection de port sur ta box — ce qui revient à
-  exposer un serveur personnel sur Internet, avec les précautions de
-  sécurité que ça implique. C'est une étape à part entière, pas juste une
-  variable à changer : dis-moi quand tu veux t'y attaquer.
+Sur Pronote (ordinateur ou téléphone) : **Mon compte → Configuration de mon
+compte → Connexion via smartphone**, qui affiche un QR code et un PIN à 4
+chiffres (même procédure que la "Première connexion" de l'admin plus haut).
+Sur Ghost School, écran de connexion : upload d'une capture d'écran du QR
+code + saisie du PIN. Le serveur décode le QR (OpenCV), se connecte à
+Pronote avec (`pronotepy.Client.qrcode_login`), vérifie établissement et
+classe, puis pose un cookie de session classique — une seule fois par
+appareil, pas à chaque visite. Le QR n'est valable que ~10 minutes.
 
-En attendant, le reste du site (cours, documents, assistant) fonctionne déjà
-pour tout le monde sur le réseau local, connexion Google ou pas — seul le
-dépôt de notes est concerné par cette limitation.
-
-### Créer les identifiants Google OAuth
-
-1. Va sur [Google Cloud Console](https://console.cloud.google.com/), crée un
-   projet (ou réutilise un projet existant).
-2. **APIs et services → Écran de consentement OAuth** : configure-le en
-   "Externe", renseigne un nom d'application ("Ghost School"), ton email.
-   Statut "Testing" (pas besoin de validation Google pour une classe) — dans
-   ce mode, tu dois ajouter chaque élève comme "utilisateur test" tant que
-   l'appli n'est pas publiée, **ou** publier l'appli (sans validation
-   requise pour les scopes basiques `openid`, `email`, `profile`).
-3. **APIs et services → Identifiants → Créer des identifiants → ID client
-   OAuth**, type "Application Web".
-4. **URI de redirection autorisée** : `http://localhost:8000/auth/callback`
-   pour commencer (ajoute l'URL HTTPS finale plus tard, en plus, le jour où
-   tu exposes le site).
-5. Récupère le **Client ID** et le **Client Secret** générés.
-
-Dans `.env` :
+### Configuration requise dans `.env`
 
 ```
-GOOGLE_CLIENT_ID=xxxxx.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=xxxxx
-BASE_URL=http://localhost:8000
-SESSION_SECRET_KEY=   # génère avec: python3 -c "import secrets; print(secrets.token_hex(32))"
+CREDENTIALS_ENCRYPTION_KEY=   # génère avec : python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+SESSION_SECRET_KEY=           # génère avec : python3 -c "import secrets; print(secrets.token_hex(32))"
+CLASSE_ATTENDUE=2F            # valeur de départ — modifiable à chaud depuis Paramétrage → Pronote
 ```
 
-### Qui a le droit de se connecter
+`CREDENTIALS_ENCRYPTION_KEY` chiffre les jetons Pronote stockés par élève
+(`eleves.pronote_credentials`, voir `Services/crypto_secrets.py`) — accès
+direct au compte scolaire réel d'un mineur, sensibilité bien supérieure au
+`credentials.json` unique de l'admin. Sans cette clé, le pairage échoue
+avec une erreur claire plutôt que de stocker les jetons en clair.
 
-Par défaut, si ni `GOOGLE_HOSTED_DOMAIN` ni `AUTHORIZED_EMAILS` ne sont
-renseignés, **n'importe quel compte Google** peut se connecter et déposer
-des notes. Pour une appli de classe, tu voudras probablement restreindre :
+### Vérification établissement + classe
 
-- **Comptes d'établissement (Google Workspace)**, ex. adresses
-  `@moncollege.fr` : `GOOGLE_HOSTED_DOMAIN=moncollege.fr` — vérifié
-  côté serveur, pas juste suggéré à Google.
-- **Comptes Gmail personnels** : liste blanche d'adresses précises,
-  `AUTHORIZED_EMAILS=eleve1@gmail.com,eleve2@gmail.com,...`
+- **Établissement** : le domaine de l'URL embarquée dans le QR doit
+  correspondre à `pronote_url` (Paramétrage → Pronote) — vérifié *avant*
+  même de tenter la connexion.
+- **Classe** : une fois connecté, `client.info.class_name` (Pronote) doit
+  correspondre à `classe_attendue` (Paramétrage → Pronote, section
+  "Classe attendue") — laisse vide pour ne pas vérifier la classe.
 
-Redémarre l'API après toute modification de `.env`.
+### Admin : gérer les comptes élèves
+
+Écran admin "Élèves" : statut de chaque élève pairé (classe constatée,
+lien Pronote cassé ou non), et un bouton "Re-pairer" qui efface le jeton
+stocké — l'élève reprendra le flux de connexion (upload QR + PIN) à sa
+prochaine visite.

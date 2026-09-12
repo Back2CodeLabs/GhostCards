@@ -9,12 +9,17 @@ import json
 import logging
 import secrets
 import sys
+import uuid
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, UploadFile, File
+import cv2
+import numpy as np
+import pronotepy
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -29,15 +34,11 @@ _GHOSTCARDS_ROOT = Path(__file__).resolve().parents[2]  # BackEnd/app/main.py ->
 if str(_GHOSTCARDS_ROOT) not in sys.path:
     sys.path.insert(0, str(_GHOSTCARDS_ROOT))
 
-from Services import db, ia_generation, ia_verification, ocr, pronote_sync  # noqa: E402
-from Services.auth import oauth  # noqa: E402
+from Services import crypto_secrets, db, ia_generation, ia_verification, ocr, pronote_sync  # noqa: E402
 from Services.config import (  # noqa: E402
     DOCUMENTS_DIR,
-    BASE_URL,
     SESSION_SECRET_KEY,
-    GOOGLE_HOSTED_DOMAIN,
-    GOOGLE_CLIENT_ID,
-    AUTHORIZED_EMAILS,
+    CLASSE_ATTENDUE,
     ADMIN_PASSWORD,
     IA_ENGINE,
     OLLAMA_URL,
@@ -97,9 +98,11 @@ def on_shutdown():
     scheduler.shutdown(wait=False)
 
 
-# --- Authentification élève (Google) ----------------------------------------
-# Sert uniquement à attribuer les notes déposées à leur auteur. Consulter
-# le site (cours, résumés, flashcards, quiz) ne nécessite pas de connexion.
+# --- Authentification élève (pairage Pronote) -------------------------------
+# Chaque élève lie son propre compte Pronote (voir pairer_eleve_pronote plus
+# bas) — sert d'identité vérifiée (établissement + classe) ET de source de
+# synchro pour son propre groupe. La consultation du site est verrouillée à
+# ceux qui ont une session valide (élève ou admin) — voir _require_session.
 
 def _current_eleve(request: Request):
     eleve_id = request.session.get("eleve_id")
@@ -116,11 +119,22 @@ def _require_admin(request: Request) -> None:
     """
     Outil de diagnostic réservé à Cédric (voir HANDOFF.md) — pas une
     fonctionnalité élève. Volontairement indépendant des comptes élèves
-    (Google) : un élève ne peut jamais devenir admin, l'accès admin repose
+    (Pronote) : un élève ne peut jamais devenir admin, l'accès admin repose
     sur un mot de passe séparé (voir /auth/admin-login).
     """
     if not request.session.get("is_admin"):
         raise HTTPException(403, "Réservé aux administrateurs.")
+
+
+def _require_session(request: Request) -> None:
+    """
+    Consultation du site verrouillée aux élèves de la classe (pairage
+    Pronote, voir pairer_eleve_pronote) et à l'admin — contrairement à
+    l'ancienne connexion Google, purement décorative pour la navigation.
+    """
+    if request.session.get("eleve_id") or request.session.get("is_admin"):
+        return
+    raise HTTPException(401, "Connexion requise.")
 
 
 def _peut_utiliser_assistant(request: Request) -> bool:
@@ -135,61 +149,74 @@ def _peut_utiliser_assistant(request: Request) -> bool:
     return bool(eleve and eleve.get("assistant_actif"))
 
 
-def _email_autorise(email: str) -> bool:
-    # Aucune restriction configurée -> ouvert à tout compte Google (voir
-    # .env.example pour activer une restriction par domaine ou liste blanche).
-    if not GOOGLE_HOSTED_DOMAIN and not AUTHORIZED_EMAILS:
-        return True
-    return email.lower() in AUTHORIZED_EMAILS
+@app.post("/api/eleves/pairage")
+async def pairer_eleve_pronote(request: Request, qr: UploadFile = File(...), pin: str = Form(...)):
+    """
+    Connexion élève par pairage Pronote self-service : l'élève génère un QR
+    code sur Pronote (Mon compte → Connexion via smartphone, comme la
+    procédure d'admin — voir Services/scripts/first_login.py), en upload une
+    capture d'écran ici avec le PIN affiché à côté. Sert à la fois d'identité
+    vérifiée (établissement + classe) et de source de synchro pour le groupe
+    propre à cet élève (voir Services/pronote_sync.py).
 
-
-@app.get("/auth/login")
-async def auth_login(request: Request):
-    if not GOOGLE_CLIENT_ID:
-        # Sans ça, authlib part quand même vers Google avec un client_id
-        # vide, qui répond "Erreur 400 : invalid_request — Missing required
-        # parameter: client_id" — techniquement correct mais incompréhensible
-        # pour un élève. Voir Services/README.md, section "Créer les
-        # identifiants Google OAuth", pour configurer GOOGLE_CLIENT_ID/
-        # GOOGLE_CLIENT_SECRET dans .env (la consultation du site reste
-        # libre sans connexion : seul le dépôt de notes en a besoin).
-        raise HTTPException(
-            503,
-            "Connexion Google non configurée sur ce serveur (GOOGLE_CLIENT_ID manquant dans .env) — "
-            "voir Services/README.md, section « Créer les identifiants Google OAuth ».",
-        )
-    redirect_uri = f"{BASE_URL}/auth/callback"
-    kwargs = {"hd": GOOGLE_HOSTED_DOMAIN} if GOOGLE_HOSTED_DOMAIN else {}
-    return await oauth.google.authorize_redirect(request, redirect_uri, **kwargs)
-
-
-@app.get("/auth/callback")
-async def auth_callback(request: Request):
-    try:
-        token = await oauth.google.authorize_access_token(request)
-    except Exception as e:
-        raise HTTPException(400, f"Échec de connexion Google : {e}")
-
-    userinfo = token.get("userinfo")
-    if not userinfo:
-        userinfo = await oauth.google.userinfo(token=token)
-
-    email = userinfo.get("email", "")
-    if GOOGLE_HOSTED_DOMAIN and userinfo.get("hd") != GOOGLE_HOSTED_DOMAIN:
-        raise HTTPException(403, f"Seuls les comptes @{GOOGLE_HOSTED_DOMAIN} sont autorisés.")
-    if not _email_autorise(email):
-        raise HTTPException(403, "Cette adresse n'est pas autorisée à se connecter à Ghost School.")
-
+    Deux vérifications, dans cet ordre (la première ne nécessite même pas
+    d'avoir tenté la connexion) :
+    1. L'URL Pronote embarquée dans le QR doit être sur le même domaine que
+       `pronote_url` (Paramétrage) — pas le bon établissement sinon.
+    2. Une fois connecté, `client.info.class_name` doit correspondre à la
+       classe attendue configurée (Paramétrage) — vide = non vérifié.
+    """
     with db.session() as conn:
-        eleve_id = db.upsert_eleve(
+        pronote_url_configuree = pronote_sync.config_pronote(conn)["pronote_url"]
+        classe_attendue = db.get_parametre(conn, "classe_attendue", CLASSE_ATTENDUE)
+
+    if not pronote_url_configuree:
+        raise HTTPException(503, "Pronote n'est pas configuré sur ce serveur (URL manquante dans Paramétrage).")
+
+    contenu = await qr.read()
+    image = cv2.imdecode(np.frombuffer(contenu, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if image is None:
+        raise HTTPException(400, "Image illisible — envoie une capture d'écran nette du QR code.")
+    donnees, _, _ = cv2.QRCodeDetector().detectAndDecode(image)
+    if not donnees:
+        raise HTTPException(400, "Aucun QR code détecté dans l'image.")
+    try:
+        qr_code = json.loads(donnees)
+    except json.JSONDecodeError:
+        raise HTTPException(400, "Ce QR code n'est pas un QR Pronote (contenu illisible).")
+
+    domaine_attendu = urlparse(pronote_url_configuree).netloc
+    domaine_qr = urlparse(qr_code.get("url", "")).netloc
+    if not domaine_qr or domaine_qr != domaine_attendu:
+        raise HTTPException(403, "Ce QR code ne correspond pas à l'établissement configuré pour Ghost School.")
+
+    try:
+        client = pronotepy.Client.qrcode_login(qr_code, pin, str(uuid.uuid4()))
+    except Exception as e:
+        raise HTTPException(401, f"Connexion Pronote refusée : {e}")
+    if not client.logged_in:
+        raise HTTPException(401, "Connexion Pronote refusée (QR code expiré ou code PIN incorrect).")
+
+    class_name = client.info.class_name
+    if classe_attendue and class_name.strip().lower() != classe_attendue.strip().lower():
+        raise HTTPException(
+            403,
+            f"La classe « {class_name or 'inconnue'} » n'est pas autorisée à se connecter à Ghost School "
+            f"(attendu : « {classe_attendue} »).",
+        )
+
+    credentials_chiffrees = crypto_secrets.chiffrer_json(client.export_credentials())
+    with db.session() as conn:
+        eleve_id = db.upsert_eleve_pronote(
             conn,
-            google_sub=userinfo["sub"],
-            email=email,
-            nom=userinfo.get("name") or email,
-            avatar_url=userinfo.get("picture"),
+            pronote_id=client.info.id,
+            nom=client.info.name,
+            email=getattr(client.info, "email", "") or "",
+            class_name=class_name,
+            credentials_chiffrees=credentials_chiffrees,
         )
     request.session["eleve_id"] = eleve_id
-    return RedirectResponse(url="/")
+    return {"ok": True, "nom": client.info.name}
 
 
 @app.post("/auth/logout")
@@ -229,7 +256,8 @@ def api_me(request: Request):
 
 
 @app.get("/api/matieres")
-def list_matieres():
+def list_matieres(request: Request):
+    _require_session(request)
     with db.session() as conn:
         rows = conn.execute(
             """SELECT m.id, m.nom, m.slug,
@@ -255,7 +283,8 @@ _COMPTES_COURS_SQL = """
 
 
 @app.get("/api/matieres/{matiere_id}/cours")
-def list_cours(matiere_id: int):
+def list_cours(matiere_id: int, request: Request):
+    _require_session(request)
     with db.session() as conn:
         rows = conn.execute(
             f"""SELECT c.id, c.date, c.heure_debut, c.heure_fin, c.professeur, c.titre,
@@ -268,19 +297,35 @@ def list_cours(matiere_id: int):
 
 
 @app.get("/api/matieres/{matiere_id}/notes")
-def list_notes_matiere(matiere_id: int):
+def list_notes_matiere(matiere_id: int, request: Request):
+    """
+    Notes personnelles — jamais partagées entre élèves : un élève ne voit
+    que ses propres notes (`eleve_id` = sa propre session), l'admin voit
+    tout, y compris celles du compte Pronote de référence (`eleve_id` NULL).
+    """
+    _require_session(request)
     with db.session() as conn:
-        rows = conn.execute(
-            """SELECT id, valeur, bareme, moyenne_classe, note_min, note_max, coefficient,
-                      commentaire, date
-               FROM notes_pronote WHERE matiere_id = ? ORDER BY date DESC""",
-            (matiere_id,),
-        ).fetchall()
+        if request.session.get("is_admin"):
+            rows = conn.execute(
+                """SELECT id, valeur, bareme, moyenne_classe, note_min, note_max, coefficient,
+                          commentaire, date, eleve_id
+                   FROM notes_pronote WHERE matiere_id = ? ORDER BY date DESC""",
+                (matiere_id,),
+            ).fetchall()
+        else:
+            eleve_id = request.session.get("eleve_id")
+            rows = conn.execute(
+                """SELECT id, valeur, bareme, moyenne_classe, note_min, note_max, coefficient,
+                          commentaire, date
+                   FROM notes_pronote WHERE matiere_id = ? AND eleve_id = ? ORDER BY date DESC""",
+                (matiere_id, eleve_id),
+            ).fetchall()
         return [dict(r) for r in rows]
 
 
 @app.get("/api/cours/recents")
-def recent_cours(limit: int = 8):
+def recent_cours(request: Request, limit: int = 8):
+    _require_session(request)
     with db.session() as conn:
         rows = conn.execute(
             f"""SELECT c.id, c.date, c.heure_debut, c.titre, c.ia_statut, c.annule, c.salle,
@@ -327,7 +372,8 @@ def cours_non_generes(request: Request):
 
 
 @app.get("/api/cours/{cours_id}")
-def get_cours(cours_id: int):
+def get_cours(cours_id: int, request: Request):
+    _require_session(request)
     with db.session() as conn:
         cours = conn.execute("SELECT * FROM cours WHERE id = ?", (cours_id,)).fetchone()
         if cours is None:
@@ -374,21 +420,21 @@ def get_cours(cours_id: int):
 
 
 @app.post("/api/cours/{cours_id}/generer")
-def generer_contenu_ia(cours_id: int, background_tasks: BackgroundTasks):
+def generer_contenu_ia(cours_id: int, request: Request, background_tasks: BackgroundTasks):
     """
     Déclenche la génération du résumé/flashcards/quiz (Ollama, voir
-    Services/ia_generation.py). Ouvert à tout le monde comme le reste de
-    la consultation du site (pas besoin d'être connecté) ; le statut
-    'en_cours' empêche simplement de relancer une génération déjà en vol.
+    Services/ia_generation.py) ; le statut 'en_cours' empêche simplement de
+    relancer une génération déjà en vol.
 
     Une PREMIÈRE génération (cours sans résumé encore) part immédiatement :
     il n'y a rien à consulter sans elle. Une RÉGÉNÉRATION (le bouton
     "Régénérer", sur un cours qui a déjà un résumé) coûte des tokens/du
     temps de calcul pour un résultat pas forcément différent — n'importe
-    quel visiteur pouvant cliquer sans être connecté, elle passe par une
-    demande en attente que l'admin valide ou rejette depuis l'écran
-    Traitements → onglet "En attente", plutôt que de partir tout de suite.
+    quel élève de la classe pouvant cliquer, elle passe par une demande en
+    attente que l'admin valide ou rejette depuis l'écran Traitements →
+    onglet "En attente", plutôt que de partir tout de suite.
     """
+    _require_session(request)
     with db.session() as conn:
         cours = conn.execute("SELECT ia_statut, ia_resume FROM cours WHERE id = ?", (cours_id,)).fetchone()
         if cours is None:
@@ -446,12 +492,13 @@ def rejeter_demande_regeneration(demande_id: int, request: Request):
 
 
 @app.post("/api/cours/{cours_id}/completer")
-def completer_contenu_ia(cours_id: int, background_tasks: BackgroundTasks):
+def completer_contenu_ia(cours_id: int, request: Request, background_tasks: BackgroundTasks):
     """
     Ajoute 10 flashcards et 10 questions de quiz de plus à une génération
     déjà en place (Services/ia_generation.py::completer_pour_cours), sans
     tout régénérer. Nécessite qu'une génération ait déjà réussi.
     """
+    _require_session(request)
     with db.session() as conn:
         cours = conn.execute("SELECT ia_statut, ia_flashcards FROM cours WHERE id = ?", (cours_id,)).fetchone()
         if cours is None:
@@ -496,7 +543,7 @@ class NoteCreate(BaseModel):
 def create_note(cours_id: int, payload: NoteCreate, request: Request):
     eleve = _current_eleve(request)
     if not eleve:
-        raise HTTPException(401, "Connecte-toi avec Google pour ajouter une note.")
+        raise HTTPException(401, "Connecte-toi pour ajouter une note.")
     contenu = payload.contenu.strip()
     if not contenu:
         raise HTTPException(400, "La note est vide.")
@@ -530,7 +577,7 @@ def create_note_photo(cours_id: int, request: Request, background_tasks: Backgro
     """
     eleve = _current_eleve(request)
     if not eleve:
-        raise HTTPException(401, "Connecte-toi avec Google pour ajouter une note.")
+        raise HTTPException(401, "Connecte-toi pour ajouter une note.")
 
     extension_type = _TYPES_FICHIERS_NOTE.get(fichier.content_type)
     if extension_type is None:
@@ -640,12 +687,13 @@ def transcrire_document(document_id: int, request: Request, background_tasks: Ba
 
 @app.get("/api/eleves")
 def list_eleves(request: Request):
-    """Liste des comptes élèves (Google) — outil admin, jamais exposé aux élèves eux-mêmes."""
+    """Liste des comptes élèves (pairage Pronote) — outil admin, jamais exposé aux élèves eux-mêmes."""
     _require_admin(request)
     with db.session() as conn:
         rows = conn.execute(
             """SELECT e.id, e.nom, e.email, e.avatar_url, e.created_at, e.derniere_connexion,
-                      e.assistant_actif, COUNT(n.id) AS nb_notes
+                      e.assistant_actif, e.pronote_class_name, e.pronote_sync_statut,
+                      e.pronote_sync_erreur, e.pronote_derniere_synchro, COUNT(n.id) AS nb_notes
                FROM eleves e LEFT JOIN notes_eleves n ON n.eleve_id = e.id
                GROUP BY e.id ORDER BY e.derniere_connexion DESC"""
         ).fetchall()
@@ -664,6 +712,24 @@ def set_assistant_actif(eleve_id: int, payload: AssistantActifPayload, request: 
         if conn.execute("SELECT 1 FROM eleves WHERE id = ?", (eleve_id,)).fetchone() is None:
             raise HTTPException(404, "Élève introuvable")
         conn.execute("UPDATE eleves SET assistant_actif = ? WHERE id = ?", (int(payload.actif), eleve_id))
+    return {"ok": True}
+
+
+@app.post("/api/eleves/{eleve_id}/reinitialiser-pronote")
+def reinitialiser_pronote_eleve(eleve_id: int, request: Request):
+    """
+    Force un élève à re-pairer son compte Pronote (jeton cassé, élève ayant
+    quitté la classe...) : efface son jeton chiffré, il devra reprendre le
+    flux de connexion (upload QR + PIN) à sa prochaine visite.
+    """
+    _require_admin(request)
+    with db.session() as conn:
+        if conn.execute("SELECT 1 FROM eleves WHERE id = ?", (eleve_id,)).fetchone() is None:
+            raise HTTPException(404, "Élève introuvable")
+        conn.execute(
+            "UPDATE eleves SET pronote_credentials = NULL, pronote_sync_statut = NULL, pronote_sync_erreur = NULL WHERE id = ?",
+            (eleve_id,),
+        )
     return {"ok": True}
 
 
@@ -691,6 +757,7 @@ def get_parametres(request: Request):
         matieres_exclues = db.get_parametre(
             conn, "matieres_exclues", "Réunion parents-profs, Journée du sport scolaire"
         )
+        classe_attendue = db.get_parametre(conn, "classe_attendue", CLASSE_ATTENDUE)
     return {
         "ia_moteur": moteur if moteur in ("ollama", "gemini", "claude") else "ollama",
         "ollama_url": ollama_url or OLLAMA_URL,
@@ -714,6 +781,7 @@ def get_parametres(request: Request):
         "sync_days_back": pronote_cfg["sync_days_back"],
         "sync_days_forward": pronote_cfg["sync_days_forward"],
         "matieres_exclues": matieres_exclues,
+        "classe_attendue": classe_attendue,
         "pronote_jeton_present": CREDENTIALS_PATH.exists(),
         "ocr_engine": ocr_cfg["moteur"],
         "paddleocr_enable_mkldnn": ocr_cfg["paddleocr_enable_mkldnn"],
@@ -759,6 +827,7 @@ class ParametresIA(BaseModel):
     sync_days_back: int | None = None
     sync_days_forward: int | None = None
     matieres_exclues: str | None = None
+    classe_attendue: str | None = None
     ocr_engine: str | None = None
     paddleocr_enable_mkldnn: bool | None = None
     verif_moteur: str | None = None
@@ -810,6 +879,8 @@ def set_parametres(payload: ParametresIA, request: Request):
             db.set_parametre(conn, "sync_days_forward", str(payload.sync_days_forward))
         if payload.matieres_exclues is not None:
             db.set_parametre(conn, "matieres_exclues", payload.matieres_exclues)
+        if payload.classe_attendue is not None:
+            db.set_parametre(conn, "classe_attendue", payload.classe_attendue)
         if payload.ocr_engine:
             db.set_parametre(conn, "ocr_engine", payload.ocr_engine)
         if payload.paddleocr_enable_mkldnn is not None:
@@ -826,7 +897,8 @@ def set_parametres(payload: ParametresIA, request: Request):
 
 
 @app.get("/api/devoirs")
-def list_devoirs():
+def list_devoirs(request: Request):
+    _require_session(request)
     with db.session() as conn:
         rows = conn.execute(
             """SELECT d.id, d.date_rendu, d.description, d.fait, m.nom AS matiere
@@ -855,7 +927,8 @@ def _reponse_fichier(chemin_local: str | None, nom_fichier: str, *, inline: bool
 
 
 @app.get("/api/documents/{document_id}/fichier")
-def download_document(document_id: int):
+def download_document(document_id: int, request: Request):
+    _require_session(request)
     with db.session() as conn:
         doc = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
         if doc is None:
@@ -864,7 +937,8 @@ def download_document(document_id: int):
 
 
 @app.get("/api/documents/{document_id}/apercu")
-def apercu_document(document_id: int):
+def apercu_document(document_id: int, request: Request):
+    _require_session(request)
     with db.session() as conn:
         doc = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
         if doc is None:
@@ -873,7 +947,8 @@ def apercu_document(document_id: int):
 
 
 @app.get("/api/notes/{note_id}/fichier")
-def download_note_fichier(note_id: int):
+def download_note_fichier(note_id: int, request: Request):
+    _require_session(request)
     with db.session() as conn:
         note = conn.execute("SELECT * FROM notes_eleves WHERE id = ?", (note_id,)).fetchone()
         if note is None:
@@ -882,7 +957,8 @@ def download_note_fichier(note_id: int):
 
 
 @app.get("/api/notes/{note_id}/apercu")
-def apercu_note_fichier(note_id: int):
+def apercu_note_fichier(note_id: int, request: Request):
+    _require_session(request)
     with db.session() as conn:
         note = conn.execute("SELECT * FROM notes_eleves WHERE id = ?", (note_id,)).fetchone()
         if note is None:

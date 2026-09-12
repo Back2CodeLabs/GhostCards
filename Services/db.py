@@ -99,21 +99,52 @@ def init_db() -> None:
         _ensure_column(conn, "cours", "statut", "TEXT")
         _ensure_column(conn, "cours", "devoir_surveille", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "sync_log", "nouvelles_notes", "INTEGER DEFAULT 0")
+        # Connexion élève par pairage Pronote (remplace l'ancienne connexion
+        # Google — voir _require_session dans BackEnd/app/main.py) : chaque
+        # élève lie SON PROPRE compte Pronote, ce qui sert à la fois d'identité
+        # vérifiée (établissement + classe) et de source de synchro pour son
+        # propre groupe (LV2, options...). `google_sub` reste en base (colonne
+        # historique, plus jamais peuplée) pour ne pas casser d'anciennes lignes.
+        _ensure_column(conn, "eleves", "pronote_id", "TEXT")
+        # Jeton pronotepy rotatif, chiffré au repos (voir Services/crypto_secrets.py)
+        # — accès direct au compte scolaire réel d'un mineur, sensibilité bien
+        # supérieure au credentials.json unique de l'admin.
+        _ensure_column(conn, "eleves", "pronote_credentials", "TEXT")
+        _ensure_column(conn, "eleves", "pronote_class_name", "TEXT")
+        _ensure_column(conn, "eleves", "pronote_sync_statut", "TEXT")
+        _ensure_column(conn, "eleves", "pronote_sync_erreur", "TEXT")
+        _ensure_column(conn, "eleves", "pronote_derniere_synchro", "TEXT")
+        # NULL = note du compte Pronote de référence (l'admin) — jamais
+        # renvoyée à un élève, seulement à l'admin (voir config_pronote /
+        # l'API GET /api/matieres/{id}/notes, scopée par eleve_id).
+        _ensure_column(conn, "notes_pronote", "eleve_id", "INTEGER REFERENCES eleves(id)")
         conn.commit()
 
 
-def upsert_eleve(conn: sqlite3.Connection, *, google_sub: str, email: str, nom: str, avatar_url: str | None) -> int:
+def upsert_eleve_pronote(
+    conn: sqlite3.Connection, *, pronote_id: str, nom: str, email: str, class_name: str, credentials_chiffrees: str,
+) -> int:
+    """
+    Crée/met à jour un élève à partir d'un pairage Pronote réussi (voir
+    BackEnd/app/main.py::pairer_eleve_pronote) — `pronote_id` (ClientInfo.id,
+    stable pour un même compte réel) joue le rôle que `google_sub` jouait
+    pour l'ancienne connexion Google.
+    """
     now = now_iso()
-    row = conn.execute("SELECT id FROM eleves WHERE google_sub = ?", (google_sub,)).fetchone()
+    row = conn.execute("SELECT id FROM eleves WHERE pronote_id = ?", (pronote_id,)).fetchone()
     if row:
         conn.execute(
-            "UPDATE eleves SET email = ?, nom = ?, avatar_url = ?, derniere_connexion = ? WHERE id = ?",
-            (email, nom, avatar_url, now, row["id"]),
+            """UPDATE eleves SET nom = ?, email = ?, pronote_class_name = ?, pronote_credentials = ?,
+               pronote_sync_statut = 'actif', pronote_sync_erreur = NULL, derniere_connexion = ? WHERE id = ?""",
+            (nom, email, class_name, credentials_chiffrees, now, row["id"]),
         )
         return row["id"]
     cur = conn.execute(
-        "INSERT INTO eleves (google_sub, email, nom, avatar_url, created_at, derniere_connexion) VALUES (?, ?, ?, ?, ?, ?)",
-        (google_sub, email, nom, avatar_url, now, now),
+        """INSERT INTO eleves
+           (google_sub, pronote_id, nom, email, pronote_class_name, pronote_credentials,
+            pronote_sync_statut, created_at, derniere_connexion)
+           VALUES (?, ?, ?, ?, ?, ?, 'actif', ?, ?)""",
+        (f"pronote:{pronote_id}", pronote_id, nom, email, class_name, credentials_chiffrees, now, now),
     )
     return cur.lastrowid
 

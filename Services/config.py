@@ -28,32 +28,33 @@ PRONOTE_URL = os.environ.get("PRONOTE_URL", "")
 # voir README section "Première connexion"). Ne JAMAIS committer ce fichier.
 CREDENTIALS_PATH = Path(os.environ.get("CREDENTIALS_PATH", BASE_DIR / "secrets" / "credentials.json"))
 
-# --- Authentification élève (Google) -----------------------------------
-# Sert uniquement à identifier qui dépose une note (section 8 du cahier
-# des charges) — la consultation du site reste libre, seul le dépôt de
-# notes nécessite d'être connecté.
-GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
-GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
-# URL publique de l'application, utilisée pour construire l'URL de retour
-# Google (doit correspondre EXACTEMENT à une "URI de redirection autorisée"
-# déclarée dans Google Cloud Console, suffixée de /auth/callback).
-BASE_URL = os.environ.get("BASE_URL", "http://localhost:8000")
+# --- Authentification élève (pairage Pronote) -------------------------------
+# Chaque élève se connecte avec SON PROPRE compte Pronote (QR code + PIN,
+# comme la procédure d'admin dans Services/scripts/first_login.py, mais en
+# self-service depuis le site) : ça sert à la fois d'identité vérifiée
+# (établissement + classe, voir BackEnd/app/main.py::pairer_eleve_pronote)
+# et de source de synchro pour son propre groupe (LV2, options...). Remplace
+# l'ancienne connexion Google, qui ne vérifiait qu'une adresse email et ne
+# donnait accès à aucune donnée Pronote propre à l'élève.
+#
 # Secret de signature des cookies de session — génère-en un avec :
 #   python3 -c "import secrets; print(secrets.token_hex(32))"
 SESSION_SECRET_KEY = os.environ.get("SESSION_SECRET_KEY", "")
 
-# Qui a le droit de se connecter — deux mécanismes, au choix (l'un ou
-# l'autre, ou aucun si la classe utilise des comptes Gmail personnels et
-# que tu ne veux pas encore restreindre) :
-# 1) Comptes d'établissement (Google Workspace) : renseigne le domaine,
-#    ex. "moncollege.fr" — seuls les comptes de ce domaine pourront se
-#    connecter (vérifié côté serveur, pas juste suggéré à Google).
-GOOGLE_HOSTED_DOMAIN = os.environ.get("GOOGLE_HOSTED_DOMAIN", "")
-# 2) Liste blanche d'adresses email précises (comptes Gmail personnels),
-#    séparées par des virgules.
-AUTHORIZED_EMAILS = {
-    e.strip().lower() for e in os.environ.get("AUTHORIZED_EMAILS", "").split(",") if e.strip()
-}
+# Clé de chiffrement (Fernet) des jetons Pronote stockés par élève (voir
+# Services/crypto_secrets.py) — accès direct au compte scolaire réel d'un
+# mineur, sensibilité bien supérieure au `credentials.json` unique de
+# l'admin (qui reste un fichier à part, non chiffré, comme avant). Génère-en
+# une avec :
+#   python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+CREDENTIALS_ENCRYPTION_KEY = os.environ.get("CREDENTIALS_ENCRYPTION_KEY", "")
+
+# Classe attendue au pairage (ex. "2F") — comparée à `ClientInfo.class_name`
+# une fois la connexion Pronote de l'élève réussie ; modifiable à chaud
+# depuis l'écran admin Paramétrage (table `parametres`), cette valeur de
+# départ ne sert que si rien n'est encore enregistré. Vide = aucune
+# vérification de classe (seul l'établissement est vérifié).
+CLASSE_ATTENDUE = os.environ.get("CLASSE_ATTENDUE", "")
 
 # --- Authentification admin (Cédric) ----------------------------------------
 # Volontairement séparée des comptes élèves (Google) : un élève ne doit
