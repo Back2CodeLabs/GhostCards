@@ -5,6 +5,16 @@
 # machine, et que les ports 80 ET 443 de la box soient redirigés vers
 # elle — 80 sert au défi ACME/à la redirection HTTP->HTTPS, 443 au trafic
 # HTTPS lui-même).
+#
+# `bind` : force Caddy à n'écouter QUE sur l'IP réseau local de
+# l'OptiPlex (celle vers laquelle la box redirige, `ip -4 addr show`),
+# plutôt que sur toutes les interfaces (0.0.0.0/::) par défaut — sans ça,
+# Caddy échoue au démarrage si `tailscale serve`/`funnel` occupe déjà le
+# port 443 sur l'interface Tailscale ("address already in use"), un
+# conflit purement lié au bind large, pas un vrai conflit de port. Adapte
+# l'adresse si l'IP locale de l'OptiPlex change (vérifie qu'elle est fixe
+# côté box/DHCP, vu que la redirection de port en dépend déjà).
 ghostschool.app {
+    bind 192.168.1.117
     reverse_proxy localhost:8000
 }
