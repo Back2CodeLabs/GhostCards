@@ -13,19 +13,23 @@ import { ScreenHeader } from "../components/Shared";
 
 export function LoginScreen({ me }) {
   const { C } = useTheme();
+  const [mode, setMode] = useState("photo"); // "photo" | "json" — voir le lien "Coller le code à la place"
   const [fichier, setFichier] = useState(null);
+  const [qrJsonTexte, setQrJsonTexte] = useState("");
   const [pin, setPin] = useState("");
   const [consentement, setConsentement] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const fileInputRef = useRef(null);
 
+  const qrPret = mode === "photo" ? !!fichier : qrJsonTexte.trim().length > 0;
+
   async function submit() {
-    if (!fichier || pin.length !== 4 || !consentement || submitting) return;
+    if (!qrPret || pin.length !== 4 || !consentement || submitting) return;
     setSubmitting(true);
     setError(null);
     try {
-      await me.pairerPronote(fichier, pin, consentement);
+      await me.pairerPronote(mode === "photo" ? fichier : qrJsonTexte.trim(), pin, consentement);
     } catch (e) {
       setError(messageErreur(e, "Pairage Pronote impossible."));
     } finally {
@@ -45,27 +49,46 @@ export function LoginScreen({ me }) {
           Ghost School est réservé à ta classe. Sur Pronote (ordinateur ou
           téléphone), va dans <b>Mon compte → Configuration de mon compte →
           Connexion via smartphone</b> : ça affiche un QR code et un code PIN
-          à 4 chiffres. Prends une capture d'écran du QR code et dépose-la
-          ici avec le PIN — une seule fois, ensuite tu resteras connecté sur
-          cet appareil.
+          à 4 chiffres. Prends une photo (ou une capture d'écran) du QR code
+          et dépose-la ici avec le PIN — une seule fois, ensuite tu resteras
+          connecté sur cet appareil.
         </p>
 
-        <div
-          onClick={() => fileInputRef.current?.click()}
-          style={{ cursor: "pointer", background: C.paperDim, border: `1px dashed ${C.line}`, borderRadius: 12, padding: "22px 16px", marginBottom: 14, maxWidth: 340, marginLeft: "auto", marginRight: "auto" }}
-        >
-          <Upload size={22} color={C.inkSoft} style={{ marginBottom: 6 }} />
-          <p style={{ fontFamily: uiFont, fontSize: 13, color: C.ink, margin: 0, fontWeight: 600 }}>
-            {fichier ? fichier.name : "Choisir la capture du QR code"}
-          </p>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            onChange={(e) => setFichier(e.target.files?.[0] || null)}
-            style={{ display: "none" }}
+        {mode === "photo" ? (
+          <div
+            onClick={() => fileInputRef.current?.click()}
+            style={{ cursor: "pointer", background: C.paperDim, border: `1px dashed ${C.line}`, borderRadius: 12, padding: "22px 16px", marginBottom: 8, maxWidth: 340, marginLeft: "auto", marginRight: "auto" }}
+          >
+            <Upload size={22} color={C.inkSoft} style={{ marginBottom: 6 }} />
+            <p style={{ fontFamily: uiFont, fontSize: 13, color: C.ink, margin: 0, fontWeight: 600 }}>
+              {fichier ? fichier.name : "Choisir la photo du QR code"}
+            </p>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={(e) => setFichier(e.target.files?.[0] || null)}
+              style={{ display: "none" }}
+            />
+          </div>
+        ) : (
+          <textarea
+            value={qrJsonTexte}
+            onChange={(e) => setQrJsonTexte(e.target.value)}
+            placeholder='Colle ici le JSON du QR code (ex. {"login":"...","jeton":"...","url":"..."})'
+            rows={4}
+            style={{ width: "100%", maxWidth: 340, background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "10px 12px", fontFamily: "monospace", fontSize: 11.5, color: C.ink, outline: "none", marginBottom: 8, resize: "vertical" }}
           />
-        </div>
+        )}
+
+        <button
+          onClick={() => setMode((m) => (m === "photo" ? "json" : "photo"))}
+          style={{ display: "block", margin: "0 auto 14px", background: "transparent", border: "none", color: C.inkFaint, fontFamily: uiFont, fontSize: 11.5, textDecoration: "underline", cursor: "pointer" }}
+        >
+          {mode === "photo"
+            ? "La photo ne passe pas ? Coller le code à la place"
+            : "Revenir à l'envoi d'une photo"}
+        </button>
 
         <input
           type="text"
@@ -111,8 +134,8 @@ export function LoginScreen({ me }) {
         <div>
           <button
             onClick={submit}
-            disabled={submitting || !fichier || pin.length !== 4 || !consentement}
-            style={{ marginTop: 18, background: C.haunt, color: C.onAccent, border: "none", borderRadius: 10, padding: "11px 24px", fontFamily: uiFont, fontSize: 14, fontWeight: 700, cursor: fichier && pin.length === 4 && consentement ? "pointer" : "default", opacity: submitting ? 0.7 : 1 }}
+            disabled={submitting || !qrPret || pin.length !== 4 || !consentement}
+            style={{ marginTop: 18, background: C.haunt, color: C.onAccent, border: "none", borderRadius: 10, padding: "11px 24px", fontFamily: uiFont, fontSize: 14, fontWeight: 700, cursor: qrPret && pin.length === 4 && consentement ? "pointer" : "default", opacity: submitting ? 0.7 : 1 }}
           >
             {submitting ? "Connexion…" : "Se connecter"}
           </button>

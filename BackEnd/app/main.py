@@ -149,15 +149,53 @@ def _peut_utiliser_assistant(request: Request) -> bool:
     return bool(eleve and eleve.get("assistant_actif"))
 
 
+# Tailles (plus grand côté, en px) essayées successivement si le décodage
+# à la résolution d'origine échoue — cv2.QRCodeDetector s'avère très
+# sensible à la résolution sur une vraie photo (éclairage inégal, moiré de
+# l'écran photographié, angle...) : une image peut échouer à sa taille
+# native et pourtant se décoder sans problème une fois redimensionnée à
+# telle ou telle taille. Constaté avec deux vraies photos de téléphone —
+# aucune des deux ne passait telle quelle, chacune ne se décode qu'à
+# certaines tailles (pas toujours les mêmes) : plusieurs essais valent
+# mieux qu'un seuil unique deviné à l'aveugle.
+_QR_TAILLES_SECOURS = (800, 1200, 1600, 600, 1000, 1400, 500, 900, 1100, 1300, 2000)
+
+
+def _decoder_qr_image(image) -> str:
+    detecteur = cv2.QRCodeDetector()
+    donnees, _, _ = detecteur.detectAndDecode(image)
+    if donnees:
+        return donnees
+
+    plus_grand_cote = max(image.shape[:2])
+    for taille in _QR_TAILLES_SECOURS:
+        if taille == plus_grand_cote:
+            continue
+        echelle = taille / plus_grand_cote
+        interpolation = cv2.INTER_AREA if echelle < 1 else cv2.INTER_CUBIC
+        redimensionnee = cv2.resize(image, None, fx=echelle, fy=echelle, interpolation=interpolation)
+        donnees, _, _ = detecteur.detectAndDecode(redimensionnee)
+        if donnees:
+            return donnees
+    return ""
+
+
 @app.post("/api/eleves/pairage")
 async def pairer_eleve_pronote(
-    request: Request, qr: UploadFile = File(...), pin: str = Form(...), consentement: bool = Form(...),
+    request: Request,
+    qr: UploadFile | None = File(None),
+    qr_json: str | None = Form(None),
+    pin: str = Form(...),
+    consentement: bool = Form(...),
 ):
     """
     Connexion élève par pairage Pronote self-service : l'élève génère un QR
     code sur Pronote (Mon compte → Connexion via smartphone, comme la
     procédure d'admin — voir Services/scripts/first_login.py), en upload une
-    capture d'écran ici avec le PIN affiché à côté. Sert à la fois d'identité
+    capture d'écran/photo ici avec le PIN affiché à côté (ou colle le JSON
+    du QR code directement, `qr_json`, si une autre appli l'a déjà décodé —
+    utile quand aucune des tailles essayées par `_decoder_qr_image` ne
+    suffit sur une photo trop dégradée). Sert à la fois d'identité
     vérifiée (établissement + classe) et de source de synchro pour le groupe
     propre à cet élève (voir Services/pronote_sync.py).
 
@@ -186,13 +224,23 @@ async def pairer_eleve_pronote(
     if not pronote_url_configuree:
         raise HTTPException(503, "Pronote n'est pas configuré sur ce serveur (URL manquante dans Paramétrage).")
 
-    contenu = await qr.read()
-    image = cv2.imdecode(np.frombuffer(contenu, dtype=np.uint8), cv2.IMREAD_COLOR)
-    if image is None:
-        raise HTTPException(400, "Image illisible — envoie une capture d'écran nette du QR code.")
-    donnees, _, _ = cv2.QRCodeDetector().detectAndDecode(image)
-    if not donnees:
-        raise HTTPException(400, "Aucun QR code détecté dans l'image.")
+    if qr_json and qr_json.strip():
+        donnees = qr_json.strip()
+    elif qr is not None:
+        contenu = await qr.read()
+        image = cv2.imdecode(np.frombuffer(contenu, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            raise HTTPException(400, "Image illisible — envoie une capture d'écran ou une photo nette du QR code.")
+        donnees = _decoder_qr_image(image)
+        if not donnees:
+            raise HTTPException(
+                400,
+                "Aucun QR code détecté dans l'image — réessaie avec une photo bien cadrée et sans reflet, "
+                "ou colle directement le JSON du QR code si tu l'as (voir « Coller le code à la place »).",
+            )
+    else:
+        raise HTTPException(400, "Envoie une image du QR code, ou colle son contenu JSON.")
+
     try:
         qr_code = json.loads(donnees)
     except json.JSONDecodeError:

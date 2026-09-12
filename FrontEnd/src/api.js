@@ -88,9 +88,16 @@ export function useMe() {
 
   // Pairage Pronote : upload de la capture d'écran du QR code + le PIN à
   // 4 chiffres (voir BackEnd/app/main.py::pairer_eleve_pronote).
+  // `fichierQr` : soit un File (image du QR), soit une chaîne (JSON du QR
+  // déjà décodé par une autre appli, si aucune photo ne se laisse lire —
+  // voir BackEnd/app/main.py::pairer_eleve_pronote).
   async function pairerPronote(fichierQr, pin, consentement) {
     const form = new FormData();
-    form.append("qr", fichierQr);
+    if (typeof fichierQr === "string") {
+      form.append("qr_json", fichierQr);
+    } else {
+      form.append("qr", fichierQr);
+    }
     form.append("pin", pin);
     form.append("consentement", consentement ? "true" : "false");
     const res = await fetch(`${API_BASE}/api/eleves/pairage`, { method: "POST", body: form });
