@@ -5,7 +5,25 @@ Numéro de version affiché dans l'app (voir `FrontEnd/package.json`, injecté
 via `vite.config.js`) — à incrémenter à chaque publication sur l'OptiPlex,
 avec une nouvelle entrée ici.
 
-## [0.2.0] — en cours
+## [0.3.0] — en cours
+
+### Added
+- Consentement explicite avant le pairage Pronote d'un élève : liste
+  précise de ce qui sera récupéré (partagé avec la classe vs gardé
+  privé), case à cocher obligatoire, horodatage enregistré comme preuve
+  (`eleves.consentement_pronote_le`).
+
+### Changed
+- La synchronisation Pronote couvre maintenant tous les comptes élèves
+  pairés, pas seulement le compte de référence (admin) : chaque élève
+  apporte son propre groupe (LV2, options...), invisible depuis un seul
+  compte. Cours/devoirs/documents restent partagés classe entière ; les
+  notes sont scopées par élève (jamais mélangées entre élèves).
+- Jeton Pronote de chaque élève tourné et rechiffré à chaque
+  synchronisation ; comptes étalés de 5 s pour ne pas déclencher le
+  throttling Pronote. Un compte cassé n'interrompt jamais les autres.
+
+## [0.2.0] — 2026-09-12
 
 ### Changed
 - **Connexion élève** : remplace la connexion Google par un pairage
