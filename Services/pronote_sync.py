@@ -26,6 +26,18 @@ Points d'attention (issus du fonctionnement réel de Pronote / pronotepy) :
   détectée automatiquement, ces libellés étant propres à chaque établissement.
 - Les notes (`client.current_period.grades`) ne se récupèrent que période
   par période, pas sur une fenêtre de dates comme cours/devoirs.
+
+Depuis le pairage Pronote par élève (voir BackEnd/app/main.py::
+pairer_eleve_pronote), la synchro ne se limite plus au seul compte de
+référence (admin) : elle boucle aussi sur chaque élève ayant un jeton
+Pronote chiffré enregistré (`eleves.pronote_credentials`), pour couvrir
+les groupes (LV2, options...) que le compte de référence ne voit pas.
+Cours/devoirs/documents restent PARTAGÉS (dédupliqués par
+date+heure+matière+professeur, peu importe quel compte les a vus en
+premier) ; les notes, elles, sont PERSONNELLES et scopées par
+`eleve_id` — jamais mélangées entre élèves. Un compte élève dont la
+synchro échoue (jeton cassé, réseau) n'interrompt jamais celle des
+autres comptes ni celle du compte de référence.
 """
 import hashlib
 import json
@@ -40,7 +52,7 @@ from pathlib import Path
 import pronotepy
 import requests
 
-from . import db, ocr
+from . import crypto_secrets, db, ocr
 from .config import (
     PRONOTE_URL,
     CREDENTIALS_PATH,
@@ -157,6 +169,24 @@ def get_client(pronote_url: str) -> pronotepy.Client:
     return client
 
 
+def _get_client_eleve(credentials_chiffrees: str) -> tuple[pronotepy.Client, str]:
+    """
+    Se connecte avec le jeton chiffré d'un élève (voir Services/crypto_secrets.py)
+    et le fait pivoter immédiatement. Renvoie le nouveau jeton chiffré à
+    persister par l'appelant (`eleves.pronote_credentials`) — contrairement
+    au compte de référence, il n'y a pas UN SEUL fichier `credentials.json`
+    à écrire, chaque élève a le sien en base.
+    """
+    creds = crypto_secrets.dechiffrer_json(credentials_chiffrees)
+    try:
+        client = pronotepy.Client.token_login(**creds)
+    except requests.exceptions.RequestException as e:
+        raise SyncError("Connexion à Pronote perdue pendant la synchronisation.") from e
+    if not client.logged_in:
+        raise SyncError("Jeton Pronote invalide ou expiré — l'élève doit re-pairer son compte.")
+    return client, crypto_secrets.chiffrer_json(client.export_credentials())
+
+
 def _dedupe_blob(data: bytes, suffix: str) -> Path:
     """
     Stocke un contenu de fichier une seule fois sous DOCUMENTS_DIR/_blobs/,
@@ -238,18 +268,81 @@ def _transcrire_document_silencieux(document_id: int | None) -> None:
         log.warning("Échec de la transcription automatique du document id=%s", document_id, exc_info=True)
 
 
+# Pause entre chaque compte élève synchronisé, pour ne jamais bombarder le
+# serveur Pronote de l'établissement de connexions rapprochées (le serveur
+# throttle déjà ça de son côté, erreur "25 — Exceeded max authorization
+# requests" — voir pronotepy) : 36 comptes à 5 s d'écart ajoutent ~3 min à
+# une synchro qui tourne toutes les 2h, largement acceptable.
+STAGGER_ELEVES_S = 5
+
+
+def _synchroniser_compte(client, cfg, date_from, date_to, fetch_content, counters, documents_a_transcrire, *, eleve_id=None):
+    """Cours/devoirs (partagés) + notes (scopées par eleve_id) pour un client déjà connecté."""
+    with db.session() as conn:
+        _sync_lessons(conn, client, date_from, date_to, fetch_content, counters, documents_a_transcrire, cfg["matieres_exclues_slugs"])
+    with db.session() as conn:
+        _sync_homework(conn, client, date_from, date_to, counters, documents_a_transcrire, cfg["matieres_exclues_slugs"])
+    with db.session() as conn:
+        _sync_grades(conn, client, counters, cfg["matieres_exclues_slugs"], eleve_id=eleve_id)
+
+
+def _synchroniser_eleve(eleve_row, cfg, date_from, date_to, fetch_content, counters, documents_a_transcrire, ctx):
+    """
+    Synchronise le compte Pronote d'UN élève, sans jamais laisser un jeton
+    cassé ou un problème réseau interrompre la synchro des autres comptes
+    (voir l'appelant, `sync()`) : toute erreur est capturée ici, journalisée
+    à la fois dans l'étape du traitement (diagnostic admin) et sur la ligne
+    `eleves` elle-même (statut visible dans l'écran "Élèves").
+    """
+    eleve_id, nom = eleve_row["id"], eleve_row["nom"]
+    t0 = time.monotonic()
+    avant = dict(counters)
+    try:
+        client, nouvelles_credentials = _get_client_eleve(eleve_row["pronote_credentials"])
+        with db.session() as conn:
+            conn.execute("UPDATE eleves SET pronote_credentials = ? WHERE id = ?", (nouvelles_credentials, eleve_id))
+
+        _synchroniser_compte(client, cfg, date_from, date_to, fetch_content, counters, documents_a_transcrire, eleve_id=eleve_id)
+
+        with db.session() as conn:
+            conn.execute(
+                "UPDATE eleves SET pronote_sync_statut = 'actif', pronote_sync_erreur = NULL, pronote_derniere_synchro = ? WHERE id = ?",
+                (_now(), eleve_id),
+            )
+        ctx.etape(
+            f"compte élève : {nom}",
+            detail=(
+                f"{counters['nouveaux_cours'] - avant['nouveaux_cours']} cours, "
+                f"{counters['nouveaux_devoirs'] - avant['nouveaux_devoirs']} devoirs, "
+                f"{counters['nouvelles_notes'] - avant['nouvelles_notes']} notes"
+            ),
+            duree_ms=int((time.monotonic() - t0) * 1000),
+        )
+    except Exception as e:  # noqa: BLE001 — un compte élève cassé ne doit jamais faire échouer toute la synchro
+        with db.session() as conn:
+            conn.execute(
+                "UPDATE eleves SET pronote_sync_statut = 'echec', pronote_sync_erreur = ? WHERE id = ?",
+                (str(e), eleve_id),
+            )
+        ctx.etape(f"compte élève : {nom}", statut="echec", detail=str(e), duree_ms=int((time.monotonic() - t0) * 1000))
+        log.warning("Échec de synchro pour l'élève %s (id=%s)", nom, eleve_id, exc_info=True)
+
+
 def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
     """
-    Lance une synchronisation complète. Retourne un résumé (compteurs).
-    C'est cette fonction qu'appellent l'API (/api/sync) et la tâche planifiée.
+    Lance une synchronisation complète : le compte de référence (admin)
+    PUIS chaque élève ayant un jeton Pronote chiffré enregistré (voir
+    module docstring). Retourne un résumé (compteurs), agrégé sur tous les
+    comptes. C'est cette fonction qu'appellent l'API (/api/sync) et la
+    tâche planifiée.
 
     Journalisée dans `traitements` (type 'pronote_sync') comme les
     extractions OCR, pour que l'admin voie aussi l'historique des synchros
     (et puisse la relancer) depuis l'écran "Traitements" — même table,
     mêmes endpoints, rien de plus à ajouter côté API/frontend. Le détail
-    par étape (connexion, cours, devoirs) est journalisé via
-    `db.log_traitement`, visible même si la synchro échoue en cours de
-    route (utile pour savoir jusqu'où elle est allée).
+    par étape (connexion, cours, devoirs, un par un par élève) est
+    journalisé via `db.log_traitement`, visible même si la synchro échoue
+    en cours de route (utile pour savoir jusqu'où elle est allée).
 
     `traitement_id` : réutilise une ligne déjà créée (déclenchement manuel
     depuis l'écran admin, voir POST /api/sync) au lieu d'en créer une
@@ -268,6 +361,9 @@ def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
     erreur = None
     with db.session() as conn:
         cfg = config_pronote(conn)
+        comptes_eleves = conn.execute(
+            "SELECT id, nom, pronote_credentials FROM eleves WHERE pronote_credentials IS NOT NULL"
+        ).fetchall()
 
     try:
         with db.log_traitement("pronote_sync", "sync", 0, traitement_id=traitement_id) as ctx:
@@ -275,7 +371,7 @@ def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
 
             t0 = time.monotonic()
             client = get_client(cfg["pronote_url"])
-            ctx.etape("connexion", detail="Connexion à Pronote (jeton pivoté)", duree_ms=int((time.monotonic() - t0) * 1000))
+            ctx.etape("connexion (référence)", detail="Connexion à Pronote (jeton pivoté)", duree_ms=int((time.monotonic() - t0) * 1000))
 
             date_from = date.today() - timedelta(days=cfg["sync_days_back"])
             date_to = date.today() + timedelta(days=cfg["sync_days_forward"])
@@ -298,14 +394,24 @@ def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
             t4 = time.monotonic()
             try:
                 with db.session() as conn:
-                    _sync_grades(conn, client, counters, cfg["matieres_exclues_slugs"])
-                ctx.etape("notes", detail=f"{counters['nouvelles_notes']} nouvelle(s) note(s)", duree_ms=int((time.monotonic() - t4) * 1000))
+                    _sync_grades(conn, client, counters, cfg["matieres_exclues_slugs"], eleve_id=None)
+                ctx.etape("notes (référence)", detail=f"{counters['nouvelles_notes']} nouvelle(s) note(s)", duree_ms=int((time.monotonic() - t4) * 1000))
             except SyncError as e:
                 # Les notes sont secondaires par rapport aux cours/devoirs :
                 # une période Pronote mal configurée (ex. pas encore de
                 # trimestre en cours) ne doit pas faire échouer toute la
                 # synchronisation, seulement cette étape.
-                ctx.etape("notes", detail=f"échec : {e}", duree_ms=int((time.monotonic() - t4) * 1000))
+                ctx.etape("notes (référence)", statut="echec", detail=str(e), duree_ms=int((time.monotonic() - t4) * 1000))
+
+            # Chaque élève pairé apporte son propre groupe (LV2, options...),
+            # invisible depuis le seul compte de référence — voir le
+            # docstring du module. Étalé dans le temps (STAGGER_ELEVES_S)
+            # pour ne pas bombarder le serveur Pronote de connexions
+            # rapprochées ; un compte cassé n'interrompt jamais les suivants.
+            for i, eleve_row in enumerate(comptes_eleves):
+                if i > 0:
+                    time.sleep(STAGGER_ELEVES_S)
+                _synchroniser_eleve(eleve_row, cfg, date_from, date_to, fetch_content, counters, documents_a_transcrire, ctx)
 
             if documents_a_transcrire:
                 t3 = time.monotonic()
@@ -487,12 +593,19 @@ def _sync_homework(conn, client, date_from, date_to, counters, documents_a_trans
             documents_a_transcrire.append(document_id)
 
 
-def _sync_grades(conn, client, counters, matieres_exclues_slugs):
+def _sync_grades(conn, client, counters, matieres_exclues_slugs, *, eleve_id=None):
     """
     Notes du trimestre/semestre en cours uniquement (`client.current_period`)
     — Pronote ne permet pas de les interroger sur une fenêtre de dates comme
     les cours/devoirs, seulement période par période. Comme pour les cours,
     grade.id est réattribué à chaque connexion : clé stable calculée nous-mêmes.
+
+    `eleve_id` : None pour le compte de référence (admin), sinon l'élève
+    propriétaire de CES notes — inclus dans la clé de dédoublonnage, sans
+    quoi deux élèves ayant par coïncidence la même note le même jour dans
+    la même matière verraient la seconde silencieusement ignorée comme
+    "déjà connue" (la clé ne portait jusqu'ici que sur le contenu de la
+    note, jamais sur qui l'a reçue).
     """
     try:
         grades = client.current_period.grades
@@ -509,7 +622,7 @@ def _sync_grades(conn, client, counters, matieres_exclues_slugs):
 
         matiere_id = db.upsert_matiere(conn, subject.name)
         commentaire = g.comment or ""
-        key = _stable_key(g.date.isoformat(), subject.name, str(g.grade), commentaire[:60])
+        key = _stable_key(eleve_id or "reference", g.date.isoformat(), subject.name, str(g.grade), commentaire[:60])
 
         row = conn.execute("SELECT id FROM notes_pronote WHERE external_key = ?", (key,)).fetchone()
         if row is not None:
@@ -517,11 +630,11 @@ def _sync_grades(conn, client, counters, matieres_exclues_slugs):
 
         conn.execute(
             """INSERT INTO notes_pronote
-               (external_key, matiere_id, valeur, bareme, moyenne_classe, note_min, note_max,
+               (external_key, matiere_id, eleve_id, valeur, bareme, moyenne_classe, note_min, note_max,
                 coefficient, commentaire, date, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                key, matiere_id, g.grade, g.out_of, g.average, g.min, g.max,
+                key, matiere_id, eleve_id, g.grade, g.out_of, g.average, g.min, g.max,
                 g.coefficient, commentaire, g.date.isoformat(), _now(),
             ),
         )

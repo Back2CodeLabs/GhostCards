@@ -6,6 +6,7 @@ tourne sur une seule machine (l'OptiPlex), donc pas besoin d'un serveur de
 base de données séparé à installer, sauvegarder et surveiller. Le mode WAL
 permet de lire pendant qu'une synchronisation écrit, sans verrouillage.
 """
+import hashlib
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -114,11 +115,38 @@ def init_db() -> None:
         _ensure_column(conn, "eleves", "pronote_sync_statut", "TEXT")
         _ensure_column(conn, "eleves", "pronote_sync_erreur", "TEXT")
         _ensure_column(conn, "eleves", "pronote_derniere_synchro", "TEXT")
+        # Horodatage du consentement explicite donné avant le pairage (voir
+        # BackEnd/app/main.py::pairer_eleve_pronote) — l'élève a vu la liste
+        # de ce qui sera récupéré avant de déposer son QR code.
+        _ensure_column(conn, "eleves", "consentement_pronote_le", "TEXT")
         # NULL = note du compte Pronote de référence (l'admin) — jamais
         # renvoyée à un élève, seulement à l'admin (voir config_pronote /
         # l'API GET /api/matieres/{id}/notes, scopée par eleve_id).
         _ensure_column(conn, "notes_pronote", "eleve_id", "INTEGER REFERENCES eleves(id)")
+        _migrer_cles_notes_pronote(conn)
         conn.commit()
+
+
+def _migrer_cles_notes_pronote(conn: sqlite3.Connection) -> None:
+    """
+    `external_key` des notes Pronote inclut désormais l'élève propriétaire
+    (voir Services/pronote_sync.py::_sync_grades) — sans quoi deux élèves
+    avec la même note le même jour dans la même matière se seraient vus
+    confondus. Recalcule la clé des lignes déjà en base avec la nouvelle
+    formule, sinon elles seraient réimportées en double au prochain sync
+    (l'ancienne clé ne correspond plus à ce que _sync_grades recherche).
+    Idempotent : sans effet si déjà migrée (même formule ⇒ même clé).
+    """
+    rows = conn.execute(
+        """SELECT n.id, n.date, n.valeur, n.commentaire, n.eleve_id, m.nom AS matiere
+           FROM notes_pronote n JOIN matieres m ON m.id = n.matiere_id"""
+    ).fetchall()
+    for r in rows:
+        raw = "|".join(str(p) for p in [
+            r["eleve_id"] or "reference", r["date"], r["matiere"], r["valeur"], (r["commentaire"] or "")[:60],
+        ])
+        nouvelle_cle = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:20]
+        conn.execute("UPDATE notes_pronote SET external_key = ? WHERE id = ?", (nouvelle_cle, r["id"]))
 
 
 def upsert_eleve_pronote(
@@ -128,23 +156,27 @@ def upsert_eleve_pronote(
     Crée/met à jour un élève à partir d'un pairage Pronote réussi (voir
     BackEnd/app/main.py::pairer_eleve_pronote) — `pronote_id` (ClientInfo.id,
     stable pour un même compte réel) joue le rôle que `google_sub` jouait
-    pour l'ancienne connexion Google.
+    pour l'ancienne connexion Google. Le consentement doit déjà avoir été
+    vérifié par l'appelant (ce n'est pas cette fonction qui décide) —
+    l'horodatage ici sert juste de preuve, mis à jour à chaque pairage/
+    re-pairage.
     """
     now = now_iso()
     row = conn.execute("SELECT id FROM eleves WHERE pronote_id = ?", (pronote_id,)).fetchone()
     if row:
         conn.execute(
             """UPDATE eleves SET nom = ?, email = ?, pronote_class_name = ?, pronote_credentials = ?,
-               pronote_sync_statut = 'actif', pronote_sync_erreur = NULL, derniere_connexion = ? WHERE id = ?""",
-            (nom, email, class_name, credentials_chiffrees, now, row["id"]),
+               pronote_sync_statut = 'actif', pronote_sync_erreur = NULL, derniere_connexion = ?,
+               consentement_pronote_le = ? WHERE id = ?""",
+            (nom, email, class_name, credentials_chiffrees, now, now, row["id"]),
         )
         return row["id"]
     cur = conn.execute(
         """INSERT INTO eleves
            (google_sub, pronote_id, nom, email, pronote_class_name, pronote_credentials,
-            pronote_sync_statut, created_at, derniere_connexion)
-           VALUES (?, ?, ?, ?, ?, ?, 'actif', ?, ?)""",
-        (f"pronote:{pronote_id}", pronote_id, nom, email, class_name, credentials_chiffrees, now, now),
+            pronote_sync_statut, created_at, derniere_connexion, consentement_pronote_le)
+           VALUES (?, ?, ?, ?, ?, ?, 'actif', ?, ?, ?)""",
+        (f"pronote:{pronote_id}", pronote_id, nom, email, class_name, credentials_chiffrees, now, now, now),
     )
     return cur.lastrowid
 
