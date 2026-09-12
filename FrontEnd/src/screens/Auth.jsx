@@ -15,16 +15,17 @@ export function LoginScreen({ me }) {
   const { C } = useTheme();
   const [fichier, setFichier] = useState(null);
   const [pin, setPin] = useState("");
+  const [consentement, setConsentement] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const fileInputRef = useRef(null);
 
   async function submit() {
-    if (!fichier || pin.length !== 4 || submitting) return;
+    if (!fichier || pin.length !== 4 || !consentement || submitting) return;
     setSubmitting(true);
     setError(null);
     try {
-      await me.pairerPronote(fichier, pin);
+      await me.pairerPronote(fichier, pin, consentement);
     } catch (e) {
       setError(messageErreur(e, "Pairage Pronote impossible."));
     } finally {
@@ -77,13 +78,41 @@ export function LoginScreen({ me }) {
           style={{ width: "100%", maxWidth: 260, background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "10px 14px", fontFamily: uiFont, fontSize: 16, letterSpacing: 4, color: C.ink, outline: "none", textAlign: "center" }}
         />
 
+        <div style={{ textAlign: "left", background: C.paperDim, border: `1px solid ${C.line}`, borderRadius: 12, padding: "14px 16px", marginTop: 16, maxWidth: 360, marginLeft: "auto", marginRight: "auto" }}>
+          <p style={{ fontFamily: uiFont, fontSize: 12, fontWeight: 700, color: C.ink, margin: "0 0 8px" }}>
+            Ce que Ghost School récupère de ton compte Pronote
+          </p>
+          <ul style={{ fontFamily: uiFont, fontSize: 12, color: C.inkSoft, lineHeight: 1.6, margin: "0 0 10px", paddingLeft: 18 }}>
+            <li>Emploi du temps (matière, horaire, salle, groupe, prof, mémo) et contenu des cours — <b>partagé avec la classe</b>.</li>
+            <li>Devoirs et documents attachés — <b>partagé avec la classe</b>.</li>
+            <li>Tes notes et moyennes — <b>gardées privées</b>, jamais visibles par un camarade.</li>
+            <li>Ton nom et ta classe, pour vérifier que tu es bien en 2F.</li>
+          </ul>
+          <p style={{ fontFamily: uiFont, fontSize: 11.5, color: C.inkFaint, margin: "0 0 10px" }}>
+            Rien d'autre : ni absences, ni retards, ni sanctions, ni actualités de l'établissement.
+            Le jeton de connexion est chiffré et sert uniquement à synchroniser automatiquement,
+            sans que tu aies à te reconnecter.
+          </p>
+          <label style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={consentement}
+              onChange={(e) => setConsentement(e.target.checked)}
+              style={{ marginTop: 2, accentColor: C.haunt }}
+            />
+            <span style={{ fontFamily: uiFont, fontSize: 12.5, color: C.ink }}>
+              J'ai lu et j'accepte que Ghost School récupère ces informations depuis mon compte Pronote.
+            </span>
+          </label>
+        </div>
+
         {error && <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.brick, margin: "10px 0 0", maxWidth: 340, marginLeft: "auto", marginRight: "auto" }}>{error}</p>}
 
         <div>
           <button
             onClick={submit}
-            disabled={submitting || !fichier || pin.length !== 4}
-            style={{ marginTop: 18, background: C.haunt, color: C.onAccent, border: "none", borderRadius: 10, padding: "11px 24px", fontFamily: uiFont, fontSize: 14, fontWeight: 700, cursor: fichier && pin.length === 4 ? "pointer" : "default", opacity: submitting ? 0.7 : 1 }}
+            disabled={submitting || !fichier || pin.length !== 4 || !consentement}
+            style={{ marginTop: 18, background: C.haunt, color: C.onAccent, border: "none", borderRadius: 10, padding: "11px 24px", fontFamily: uiFont, fontSize: 14, fontWeight: 700, cursor: fichier && pin.length === 4 && consentement ? "pointer" : "default", opacity: submitting ? 0.7 : 1 }}
           >
             {submitting ? "Connexion…" : "Se connecter"}
           </button>

@@ -150,7 +150,9 @@ def _peut_utiliser_assistant(request: Request) -> bool:
 
 
 @app.post("/api/eleves/pairage")
-async def pairer_eleve_pronote(request: Request, qr: UploadFile = File(...), pin: str = Form(...)):
+async def pairer_eleve_pronote(
+    request: Request, qr: UploadFile = File(...), pin: str = Form(...), consentement: bool = Form(...),
+):
     """
     Connexion élève par pairage Pronote self-service : l'élève génère un QR
     code sur Pronote (Mon compte → Connexion via smartphone, comme la
@@ -159,13 +161,24 @@ async def pairer_eleve_pronote(request: Request, qr: UploadFile = File(...), pin
     vérifiée (établissement + classe) et de source de synchro pour le groupe
     propre à cet élève (voir Services/pronote_sync.py).
 
-    Deux vérifications, dans cet ordre (la première ne nécessite même pas
-    d'avoir tenté la connexion) :
-    1. L'URL Pronote embarquée dans le QR doit être sur le même domaine que
+    `consentement` : coché après lecture de la liste de ce qui sera
+    récupéré (écran de connexion, voir FrontEnd/src/screens/Auth.jsx) —
+    obligatoire, vérifié avant tout le reste (accès direct à des données
+    scolaires réelles d'un mineur). Son horodatage est enregistré comme
+    preuve (voir Services/db.py::upsert_eleve_pronote), pas juste vérifié
+    puis oublié.
+
+    Trois vérifications, dans cet ordre (les deux premières ne nécessitent
+    même pas d'avoir tenté la connexion) :
+    1. Le consentement doit être donné.
+    2. L'URL Pronote embarquée dans le QR doit être sur le même domaine que
        `pronote_url` (Paramétrage) — pas le bon établissement sinon.
-    2. Une fois connecté, `client.info.class_name` doit correspondre à la
+    3. Une fois connecté, `client.info.class_name` doit correspondre à la
        classe attendue configurée (Paramétrage) — vide = non vérifié.
     """
+    if not consentement:
+        raise HTTPException(400, "Le consentement à la récupération des données Pronote est obligatoire.")
+
     with db.session() as conn:
         pronote_url_configuree = pronote_sync.config_pronote(conn)["pronote_url"]
         classe_attendue = db.get_parametre(conn, "classe_attendue", CLASSE_ATTENDUE)
@@ -693,7 +706,8 @@ def list_eleves(request: Request):
         rows = conn.execute(
             """SELECT e.id, e.nom, e.email, e.avatar_url, e.created_at, e.derniere_connexion,
                       e.assistant_actif, e.pronote_class_name, e.pronote_sync_statut,
-                      e.pronote_sync_erreur, e.pronote_derniere_synchro, COUNT(n.id) AS nb_notes
+                      e.pronote_sync_erreur, e.pronote_derniere_synchro, e.consentement_pronote_le,
+                      COUNT(n.id) AS nb_notes
                FROM eleves e LEFT JOIN notes_eleves n ON n.eleve_id = e.id
                GROUP BY e.id ORDER BY e.derniere_connexion DESC"""
         ).fetchall()

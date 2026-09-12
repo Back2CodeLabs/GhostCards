@@ -88,10 +88,11 @@ export function useMe() {
 
   // Pairage Pronote : upload de la capture d'écran du QR code + le PIN à
   // 4 chiffres (voir BackEnd/app/main.py::pairer_eleve_pronote).
-  async function pairerPronote(fichierQr, pin) {
+  async function pairerPronote(fichierQr, pin, consentement) {
     const form = new FormData();
     form.append("qr", fichierQr);
     form.append("pin", pin);
+    form.append("consentement", consentement ? "true" : "false");
     const res = await fetch(`${API_BASE}/api/eleves/pairage`, { method: "POST", body: form });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
