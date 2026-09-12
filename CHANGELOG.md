@@ -5,7 +5,16 @@ Numéro de version affiché dans l'app (voir `FrontEnd/package.json`, injecté
 via `vite.config.js`) — à incrémenter à chaque publication sur l'OptiPlex,
 avec une nouvelle entrée ici.
 
-## [0.3.1] — en cours
+## [0.3.2] — en cours
+
+### Added
+- `BackEnd/deploy/Caddyfile` + procédure documentée (`Services/README.md`)
+  pour exposer le site en HTTPS (Caddy, Let's Encrypt automatique)
+  maintenant que `ghostschool.app` pointe vers l'OptiPlex.
+- Réglage `SESSION_COOKIE_SECURE` (faux par défaut) pour marquer le
+  cookie de session "Secure" une fois HTTPS confirmé en place.
+
+## [0.3.1] — 2026-09-12
 
 ### Fixed
 - Le pairage Pronote échouait ("Aucun QR code détecté") sur une vraie
