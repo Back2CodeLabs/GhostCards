@@ -123,6 +123,7 @@ def init_db() -> None:
         # renvoyée à un élève, seulement à l'admin (voir config_pronote /
         # l'API GET /api/matieres/{id}/notes, scopée par eleve_id).
         _ensure_column(conn, "notes_pronote", "eleve_id", "INTEGER REFERENCES eleves(id)")
+        _fusionner_eleves_dupliques(conn)
         _migrer_cles_notes_pronote(conn)
         conn.commit()
 
@@ -154,21 +155,32 @@ def upsert_eleve_pronote(
 ) -> int:
     """
     Crée/met à jour un élève à partir d'un pairage Pronote réussi (voir
-    BackEnd/app/main.py::pairer_eleve_pronote) — `pronote_id` (ClientInfo.id,
-    stable pour un même compte réel) joue le rôle que `google_sub` jouait
-    pour l'ancienne connexion Google. Le consentement doit déjà avoir été
-    vérifié par l'appelant (ce n'est pas cette fonction qui décide) —
-    l'horodatage ici sert juste de preuve, mis à jour à chaque pairage/
-    re-pairage.
+    BackEnd/app/main.py::pairer_eleve_pronote). Match par nom normalisé, PAS
+    par `pronote_id` : contrairement à ce qu'indiquait cette docstring
+    avant correction, `pronote_id` (ClientInfo.id) N'EST PAS stable pour un
+    même compte réel — c'est un id de ressource "à usage interne" côté
+    Pronote, régénéré à chaque nouvelle session/pairage (confirmé par un
+    doublon réel en prod le 2026-09-13 : un même élève re-pairé a produit
+    deux `pronote_id` différents, donc deux lignes `eleves`). `pronote_id`
+    reste stocké à titre indicatif (dernier pairage connu) mais ne sert
+    plus de clé de correspondance. Sur l'effectif d'une seule classe (36
+    élèves), un homonyme est extrêmement improbable ; le cas échéant,
+    l'admin peut forcer un nouveau pairage propre (bouton "Re-pairer",
+    ElevesScreen). Le consentement doit déjà avoir été vérifié par
+    l'appelant (ce n'est pas cette fonction qui décide) — l'horodatage ici
+    sert juste de preuve, mis à jour à chaque pairage/re-pairage.
     """
     now = now_iso()
-    row = conn.execute("SELECT id FROM eleves WHERE pronote_id = ?", (pronote_id,)).fetchone()
+    nom_normalise = nom.strip().lower()
+    row = conn.execute(
+        "SELECT id FROM eleves WHERE pronote_id IS NOT NULL AND lower(trim(nom)) = ?", (nom_normalise,)
+    ).fetchone()
     if row:
         conn.execute(
-            """UPDATE eleves SET nom = ?, email = ?, pronote_class_name = ?, pronote_credentials = ?,
+            """UPDATE eleves SET nom = ?, email = ?, pronote_id = ?, pronote_class_name = ?, pronote_credentials = ?,
                pronote_sync_statut = 'actif', pronote_sync_erreur = NULL, derniere_connexion = ?,
                consentement_pronote_le = ? WHERE id = ?""",
-            (nom, email, class_name, credentials_chiffrees, now, now, row["id"]),
+            (nom, email, pronote_id, class_name, credentials_chiffrees, now, now, row["id"]),
         )
         return row["id"]
     cur = conn.execute(
@@ -179,6 +191,34 @@ def upsert_eleve_pronote(
         (f"pronote:{pronote_id}", pronote_id, nom, email, class_name, credentials_chiffrees, now, now, now),
     )
     return cur.lastrowid
+
+
+def _fusionner_eleves_dupliques(conn: sqlite3.Connection) -> None:
+    """
+    Corrige les doublons produits avant la correction ci-dessus
+    d'`upsert_eleve_pronote` (constaté en prod le 2026-09-13, `pronote_id`
+    non stable d'un pairage à l'autre pour un même élève réel). Regroupe
+    les lignes `eleves` pairées par nom normalisé ; pour chaque groupe de
+    plus d'une ligne, garde celle synchronisée le plus récemment, supprime
+    les `notes_pronote` des lignes éliminées (même élève réel ⇒ mêmes
+    notes, déjà couvertes par la ligne conservée une fois resynchronisée),
+    puis supprime ces lignes. Idempotent : sans effet si aucun doublon.
+    """
+    rows = conn.execute(
+        "SELECT id, nom, pronote_derniere_synchro, derniere_connexion FROM eleves WHERE pronote_id IS NOT NULL"
+    ).fetchall()
+    groupes: dict[str, list[sqlite3.Row]] = {}
+    for r in rows:
+        groupes.setdefault(r["nom"].strip().lower(), []).append(r)
+
+    for membres in groupes.values():
+        if len(membres) < 2:
+            continue
+        membres.sort(key=lambda r: r["pronote_derniere_synchro"] or r["derniere_connexion"] or "", reverse=True)
+        doublons = membres[1:]
+        for d in doublons:
+            conn.execute("DELETE FROM notes_pronote WHERE eleve_id = ?", (d["id"],))
+            conn.execute("DELETE FROM eleves WHERE id = ?", (d["id"],))
 
 
 @contextmanager
