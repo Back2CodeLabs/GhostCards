@@ -279,26 +279,39 @@ def upsert_eleve_pronote(
 ) -> int:
     """
     Crée/met à jour un élève à partir d'un pairage Pronote réussi (voir
-    BackEnd/app/main.py::pairer_eleve_pronote). Match par nom normalisé, PAS
-    par `pronote_id` : contrairement à ce qu'indiquait cette docstring
-    avant correction, `pronote_id` (ClientInfo.id) N'EST PAS stable pour un
-    même compte réel — c'est un id de ressource "à usage interne" côté
-    Pronote, régénéré à chaque nouvelle session/pairage (confirmé par un
-    doublon réel en prod le 2026-09-13 : un même élève re-pairé a produit
-    deux `pronote_id` différents, donc deux lignes `eleves`). `pronote_id`
-    reste stocké à titre indicatif (dernier pairage connu) mais ne sert
-    plus de clé de correspondance. Sur l'effectif d'une seule classe (36
-    élèves), un homonyme est extrêmement improbable ; le cas échéant,
-    l'admin peut forcer un nouveau pairage propre (bouton "Re-pairer",
-    ElevesScreen). Le consentement doit déjà avoir été vérifié par
-    l'appelant (ce n'est pas cette fonction qui décide) — l'horodatage ici
-    sert juste de preuve, mis à jour à chaque pairage/re-pairage.
+    BackEnd/app/main.py::pairer_eleve_pronote). Match par (nom normalisé,
+    classe), PAS par `pronote_id` : contrairement à ce qu'indiquait cette
+    docstring avant correction, `pronote_id` (ClientInfo.id) N'EST PAS
+    stable pour un même compte réel — c'est un id de ressource "à usage
+    interne" côté Pronote, régénéré à chaque nouvelle session/pairage
+    (confirmé par un doublon réel en prod le 2026-09-13 : un même élève
+    re-pairé a produit deux `pronote_id` différents, donc deux lignes
+    `eleves`). `pronote_id` reste stocké à titre indicatif (dernier pairage
+    connu) mais ne sert plus de clé de correspondance. La comparaison se
+    fait en Python plutôt qu'en SQL (`lower()` de SQLite est ASCII
+    uniquement — un nom avec une majuscule accentuée, ex. "Éléonore", ne
+    matcherait jamais avec lui-même via `lower(trim(nom))` côté SQL) et
+    inclut la classe (pas le nom seul) : sur l'effectif d'une seule classe
+    (36 élèves), un homonyme est extrêmement improbable, mais un homonyme
+    entre deux classes différentes (2F/2E) ne doit jamais faire écraser la
+    ligne de l'un par le pairage de l'autre — même principe que
+    `_fusionner_eleves_dupliques`. Le cas échéant, l'admin peut forcer un
+    nouveau pairage propre (bouton "Re-pairer", ElevesScreen). Le
+    consentement doit déjà avoir été vérifié par l'appelant (ce n'est pas
+    cette fonction qui décide) — l'horodatage ici sert juste de preuve,
+    mis à jour à chaque pairage/re-pairage.
     """
     now = now_iso()
     nom_normalise = nom.strip().lower()
-    row = conn.execute(
-        "SELECT id FROM eleves WHERE pronote_id IS NOT NULL AND lower(trim(nom)) = ?", (nom_normalise,)
-    ).fetchone()
+    classe_normalisee = (class_name or "").strip().lower()
+    row = next(
+        (
+            r for r in conn.execute("SELECT id, nom, pronote_class_name FROM eleves WHERE pronote_id IS NOT NULL").fetchall()
+            if r["nom"].strip().lower() == nom_normalise
+            and (r["pronote_class_name"] or "").strip().lower() == classe_normalisee
+        ),
+        None,
+    )
     if row:
         conn.execute(
             """UPDATE eleves SET nom = ?, email = ?, pronote_id = ?, pronote_class_name = ?, pronote_credentials = ?,

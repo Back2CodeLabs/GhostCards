@@ -19,6 +19,20 @@ avec une nouvelle entrée ici.
   une matière exclue est maintenant masquée dans l'app, mais toujours
   synchronisée en arrière-plan.
 
+### Fixed
+- Le pairage Pronote d'un élève dont le nom contient une majuscule
+  accentuée (ex. "Éléonore") pouvait créer un doublon à chaque nouvelle
+  connexion : la comparaison des noms se faisait côté SQLite, dont
+  `lower()` ne replie pas l'unicode. Corrigée en comparant en Python.
+  Cette comparaison tient aussi compte de la classe désormais (comme le
+  fusionnement des doublons déjà en base), pour ne jamais confondre un
+  homonyme entre deux classes différentes.
+
+### Added
+- Première suite de tests automatisés du projet (`BackEnd/tests/`, pytest)
+  — pairage Pronote, multi-classe, matières à exclure, clé Gemini
+  personnelle. Voir `BackEnd/README.md`, section "Tests".
+
 ## [0.5.0] — 2026-09-13
 
 ### Added
