@@ -2,13 +2,13 @@ import { useState } from "react";
 import { ChevronRight, RefreshCw, Sparkles } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 import { API_BASE, useApi, ajouterClasse } from "../api";
-import { Loading, ApiError, EmptyState, SectionLabel, Divider, IndicateursCours, prenomDe } from "../components/Shared";
+import { Loading, ApiError, EmptyState, SectionLabel, Divider, IndicateursCours, prenomDe, ClasseTabs } from "../components/Shared";
 
 /* ------------------------------------------------------------------ */
 /* Accueil                                                              */
 /* ------------------------------------------------------------------ */
 
-export function HomeScreen({ me, onOpenCours, classeFiltre }) {
+export function HomeScreen({ me, onOpenCours, classeFiltre, classesNoms, onChangeClasse }) {
   const { C, colorFor } = useTheme();
   const suggestionIA = useApi(ajouterClasse("/api/cours/suggestion-ia", classeFiltre), [classeFiltre]);
   const duJour = useApi(ajouterClasse("/api/cours/du-jour", classeFiltre), [classeFiltre]);
@@ -51,6 +51,12 @@ export function HomeScreen({ me, onOpenCours, classeFiltre }) {
           {syncing ? "Synchro…" : "Actualiser"}
         </button>
       </div>
+
+      {classesNoms?.length > 0 && (
+        <div style={{ padding: "0 20px 14px" }}>
+          <ClasseTabs noms={classesNoms} valeur={classeFiltre} onChange={onChangeClasse} />
+        </div>
+      )}
 
       {suggestion && (
         <section style={{ padding: "4px 20px 4px" }}>

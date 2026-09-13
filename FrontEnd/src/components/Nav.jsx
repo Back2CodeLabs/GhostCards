@@ -1,32 +1,5 @@
 import { Home, BookOpen, Search as SearchIcon, MessageCircle, ListChecks, Users, Settings, ShieldCheck, LogIn, LogOut, UserCircle } from "lucide-react";
 import { useTheme, uiFont, glowText } from "../theme";
-import { useApi } from "../api";
-
-/* ------------------------------------------------------------------ */
-/* Sélecteur de classe (admin uniquement) — filtre Accueil/Matières/     */
-/* Recherche/Traitements sur une classe précise ("2E") au lieu de la vue */
-/* fusionnée par défaut (toutes les classes). Invisible tant qu'il n'y a */
-/* qu'une seule classe enregistrée (rien à filtrer).                    */
-/* ------------------------------------------------------------------ */
-
-export function ClasseFilterControl({ classeFiltre, onChange }) {
-  const { C } = useTheme();
-  const classes = useApi("/api/classes");
-  if (!classes.data || classes.data.length < 2) return null;
-  return (
-    <select
-      value={classeFiltre || ""}
-      onChange={(e) => onChange(e.target.value || null)}
-      aria-label="Filtrer par classe"
-      style={{ border: `1px solid ${C.line}`, background: C.white, borderRadius: 999, padding: "6px 10px", fontFamily: uiFont, fontSize: 12.5, fontWeight: 600, color: C.inkSoft, cursor: "pointer" }}
-    >
-      <option value="">Toutes les classes</option>
-      {classes.data.map((c) => (
-        <option key={c.id} value={c.nom}>{c.nom}</option>
-      ))}
-    </select>
-  );
-}
 
 /* ------------------------------------------------------------------ */
 /* Connexion admin (bouton bouclier dans l'en-tête)                     */

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Users, Sparkles, RotateCcw, XCircle } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 import { API_BASE, useApi, messageErreur } from "../api";
-import { Loading, ApiError, EmptyState } from "../components/Shared";
+import { Loading, ApiError, EmptyState, ClasseTabs } from "../components/Shared";
 
 /* ------------------------------------------------------------------ */
 /* Élèves — liste admin (comptes pairés avec leur propre Pronote, voir  */
@@ -17,13 +17,32 @@ export function ElevesScreen() {
   const [reinitId, setReinitId] = useState(null);
   const [reinitError, setReinitError] = useState(null);
   const [filtreClasse, setFiltreClasse] = useState(null);
+  const [filtreGroupe, setFiltreGroupe] = useState(null);
 
-  // Filtre par classe côté client : la liste est déjà entièrement chargée
-  // (36-72 élèves), pas la peine d'un aller-retour serveur pour ça.
+  function changerClasse(c) {
+    setFiltreClasse(c);
+    setFiltreGroupe(null); // les groupes affichés dépendent de la classe sélectionnée
+  }
+
+  // Filtres côté client : la liste est déjà entièrement chargée (36-72
+  // élèves), pas la peine d'un aller-retour serveur pour ça.
   const classesPresentes = [...new Set((eleves.data || []).map((e) => e.pronote_class_name).filter(Boolean))].sort();
-  const elevesAffiches = filtreClasse
+  const elevesDeLaClasse = filtreClasse
     ? (eleves.data || []).filter((e) => e.pronote_class_name === filtreClasse)
     : eleves.data;
+  // Groupe(s) (LV2, options...) constatés parmi les élèves de la classe
+  // sélectionnée — un élève peut appartenir à plusieurs groupes à la fois
+  // (`pronote_groupes` est une chaîne "GR2, GR1 ESPAGNOL"), d'où le split.
+  const groupesPresents = filtreClasse
+    ? [...new Set(
+        (elevesDeLaClasse || [])
+          .flatMap((e) => (e.pronote_groupes || "").split(",").map((g) => g.trim()))
+          .filter(Boolean)
+      )].sort()
+    : [];
+  const elevesAffiches = filtreGroupe
+    ? elevesDeLaClasse.filter((e) => (e.pronote_groupes || "").split(",").map((g) => g.trim()).includes(filtreGroupe))
+    : elevesDeLaClasse;
 
   async function toggleAssistant(eleve) {
     setTogglingId(eleve.id);
@@ -66,24 +85,14 @@ export function ElevesScreen() {
         </p>
         {reinitError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "8px 0 0" }}>{reinitError}</p>}
       </div>
-      {classesPresentes.length > 1 && (
-        <div style={{ display: "flex", gap: 8, padding: "0 20px 12px", flexWrap: "wrap" }}>
-          {[null, ...classesPresentes].map((c) => {
-            const actif = filtreClasse === c;
-            return (
-              <button
-                key={c || "toutes"}
-                onClick={() => setFiltreClasse(c)}
-                style={{
-                  background: actif ? C.hauntSoft : C.white, border: `1px solid ${actif ? C.haunt : C.line}`,
-                  color: actif ? C.haunt : C.inkSoft, borderRadius: 999, padding: "6px 14px",
-                  fontFamily: uiFont, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
-                }}
-              >
-                {c || "Toutes"}
-              </button>
-            );
-          })}
+      {classesPresentes.length > 0 && (
+        <div style={{ padding: "0 20px 8px" }}>
+          <ClasseTabs noms={classesPresentes} valeur={filtreClasse} onChange={changerClasse} />
+        </div>
+      )}
+      {groupesPresents.length > 0 && (
+        <div style={{ padding: "0 20px 12px" }}>
+          <ClasseTabs noms={groupesPresents} valeur={filtreGroupe} onChange={setFiltreGroupe} libelleToutes="Tous les groupes" />
         </div>
       )}
       <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 8 }}>

@@ -15,6 +15,37 @@ export function prenomDe(nomComplet) {
   return prenom || mots[mots.length - 1] || "";
 }
 
+// Rangée d'onglets pill "Toutes / 2E / 2F..." — filtre par classe (admin
+// uniquement) réutilisé par Accueil, Matières et Élèves (ce dernier y
+// ajoute une seconde rangée pour le groupe, voir ElevesScreen.jsx).
+// Toujours affichée dès qu'il y a au moins une classe, même une seule
+// (retour terrain : utile même sans deuxième classe, pas la peine
+// d'attendre que 2E existe pour voir le contrôle).
+export function ClasseTabs({ noms, valeur, onChange, libelleToutes = "Toutes" }) {
+  const { C } = useTheme();
+  if (!noms || noms.length === 0) return null;
+  return (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      {[null, ...noms].map((nom) => {
+        const actif = valeur === nom;
+        return (
+          <button
+            key={nom || "toutes"}
+            onClick={() => onChange(nom)}
+            style={{
+              background: actif ? C.hauntSoft : C.white, border: `1px solid ${actif ? C.haunt : C.line}`,
+              color: actif ? C.haunt : C.inkSoft, borderRadius: 999, padding: "6px 14px",
+              fontFamily: uiFont, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+            }}
+          >
+            {nom || libelleToutes}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function ScreenHeader({ title, onBack, right }) {
   const { C } = useTheme();
   return (

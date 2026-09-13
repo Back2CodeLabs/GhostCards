@@ -1,13 +1,13 @@
 import { ChevronRight } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 import { useApi, ajouterClasse } from "../api";
-import { Loading, ApiError, EmptyState, ScreenHeader, IndicateursCours } from "../components/Shared";
+import { Loading, ApiError, EmptyState, ScreenHeader, IndicateursCours, ClasseTabs } from "../components/Shared";
 
 /* ------------------------------------------------------------------ */
 /* Matières                                                             */
 /* ------------------------------------------------------------------ */
 
-export function SubjectsScreen({ onOpenSubject, classeFiltre }) {
+export function SubjectsScreen({ onOpenSubject, classeFiltre, classesNoms, onChangeClasse }) {
   const { C, colorFor } = useTheme();
   const matieres = useApi(ajouterClasse("/api/matieres", classeFiltre), [classeFiltre]);
   return (
@@ -15,6 +15,11 @@ export function SubjectsScreen({ onOpenSubject, classeFiltre }) {
       <div style={{ padding: "20px 20px 4px" }}>
         <h1 style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 24, color: C.ink, margin: 0 }}>Matières</h1>
       </div>
+      {classesNoms?.length > 0 && (
+        <div style={{ padding: "0 20px 4px" }}>
+          <ClasseTabs noms={classesNoms} valeur={classeFiltre} onChange={onChangeClasse} />
+        </div>
+      )}
       <div style={{ padding: "16px 20px" }}>
         {matieres.loading && <Loading />}
         {matieres.error && <ApiError message={matieres.error} onRetry={matieres.reload} />}

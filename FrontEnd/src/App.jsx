@@ -3,9 +3,9 @@ import "./index.css";
 import { Ghost, Moon, Sun } from "lucide-react";
 
 import { ThemeContext, uiFont, glowText, makeColorFor, LIGHT, DARK } from "./theme";
-import { useMe } from "./api";
+import { useMe, useApi } from "./api";
 
-import { Nav, AuthControl, AdminControl, RetroGrid, ClasseFilterControl } from "./components/Nav";
+import { Nav, AuthControl, AdminControl, RetroGrid } from "./components/Nav";
 
 import { HomeScreen } from "./screens/HomeScreen";
 import { SubjectsScreen, SubjectDetail } from "./screens/SubjectsScreen";
@@ -29,6 +29,12 @@ export default function App() {
   const [stack, setStack] = useState([]);
   const [classeFiltre, setClasseFiltre] = useState(null);
   const me = useMe();
+  // Admin uniquement (l'endpoint est réservé admin — un élève reçoit un
+  // 403 silencieux ici, sans effet visible) : liste des classes pour les
+  // onglets de filtre (Accueil, Matières — voir ClasseTabs), levée ici
+  // pour n'interroger /api/classes qu'une fois plutôt que par écran.
+  const classesApi = useApi("/api/classes");
+  const classesNoms = (classesApi.data || []).map((c) => c.nom);
 
   const C = themeName === "dark" ? DARK : LIGHT;
   const colorFor = makeColorFor(C);
@@ -93,9 +99,9 @@ export default function App() {
   } else if (top?.screen === "traitement") {
     content = <TraitementDetail traitementId={top.params.id} onBack={pop} onOpenCours={openCours} />;
   } else if (tab === "home") {
-    content = <HomeScreen me={me} onOpenCours={openCours} classeFiltre={classeFiltre} />;
+    content = <HomeScreen me={me} onOpenCours={openCours} classeFiltre={classeFiltre} classesNoms={isAdmin ? classesNoms : []} onChangeClasse={setClasseFiltre} />;
   } else if (tab === "subjects") {
-    content = <SubjectsScreen onOpenSubject={openSubject} classeFiltre={classeFiltre} />;
+    content = <SubjectsScreen onOpenSubject={openSubject} classeFiltre={classeFiltre} classesNoms={isAdmin ? classesNoms : []} onChangeClasse={setClasseFiltre} />;
   } else if (tab === "search") {
     content = <SearchScreen onOpenSubject={openSubject} onOpenCours={openCours} classeFiltre={classeFiltre} />;
   } else if (tab === "assistant") {
@@ -144,7 +150,6 @@ export default function App() {
               </span>
             </div>
             <div className="flex items-center gap-2">
-              {isAdmin && <ClasseFilterControl classeFiltre={classeFiltre} onChange={setClasseFiltre} />}
               <AuthControl me={me} onLogin={requireLogin} />
               <AdminControl me={me} onOpenLogin={openAdminLogin} />
               <button
