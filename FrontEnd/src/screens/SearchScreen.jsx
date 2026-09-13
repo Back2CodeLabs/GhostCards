@@ -1,16 +1,16 @@
 import { useState } from "react";
 import { Search as SearchIcon } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
-import { useApi } from "../api";
+import { useApi, ajouterClasse } from "../api";
 
 /* ------------------------------------------------------------------ */
 /* Recherche (locale, sur les données déjà chargées)                    */
 /* ------------------------------------------------------------------ */
 
-export function SearchScreen({ onOpenSubject, onOpenCours }) {
+export function SearchScreen({ onOpenSubject, onOpenCours, classeFiltre }) {
   const { C } = useTheme();
-  const matieres = useApi("/api/matieres");
-  const recents = useApi("/api/cours/recents?limit=50");
+  const matieres = useApi(ajouterClasse("/api/matieres", classeFiltre), [classeFiltre]);
+  const recents = useApi(ajouterClasse("/api/cours/recents?limit=50", classeFiltre), [classeFiltre]);
   const [q, setQ] = useState("");
   const query = q.trim().toLowerCase();
 

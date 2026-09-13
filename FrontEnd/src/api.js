@@ -10,6 +10,18 @@ import { useState, useEffect, useCallback } from "react";
 // contenu mixte.
 export const API_BASE = "";
 
+// Ajoute `?classe=` (ou `&classe=` si le chemin a déjà une query string) à
+// un chemin d'API — utilisé par les écrans admin avec le sélecteur de
+// classe (FrontEnd/src/components/Nav.jsx::ClasseFilterControl) pour
+// filtrer cours/devoirs/matières/traitements par classe. `classe` falsy
+// (aucun filtre, ou élève — sa classe est déjà résolue côté serveur à
+// partir de sa session, jamais de ce paramètre) laisse le chemin intact.
+export function ajouterClasse(path, classe) {
+  if (!classe) return path;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}classe=${encodeURIComponent(classe)}`;
+}
+
 export async function apiGet(path) {
   const res = await fetch(`${API_BASE}${path}`);
   if (!res.ok) throw new Error(`${res.status} sur ${path}`);

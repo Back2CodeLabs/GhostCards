@@ -1,19 +1,19 @@
 import { useState } from "react";
 import { ChevronRight, RefreshCw, Sparkles } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
-import { API_BASE, useApi } from "../api";
+import { API_BASE, useApi, ajouterClasse } from "../api";
 import { Loading, ApiError, EmptyState, SectionLabel, Divider, IndicateursCours, prenomDe } from "../components/Shared";
 
 /* ------------------------------------------------------------------ */
 /* Accueil                                                              */
 /* ------------------------------------------------------------------ */
 
-export function HomeScreen({ me, onOpenCours }) {
+export function HomeScreen({ me, onOpenCours, classeFiltre }) {
   const { C, colorFor } = useTheme();
-  const suggestionIA = useApi("/api/cours/suggestion-ia");
-  const duJour = useApi("/api/cours/du-jour");
-  const recents = useApi("/api/cours/recents?limit=5");
-  const devoirs = useApi("/api/devoirs");
+  const suggestionIA = useApi(ajouterClasse("/api/cours/suggestion-ia", classeFiltre), [classeFiltre]);
+  const duJour = useApi(ajouterClasse("/api/cours/du-jour", classeFiltre), [classeFiltre]);
+  const recents = useApi(ajouterClasse("/api/cours/recents?limit=5", classeFiltre), [classeFiltre]);
+  const devoirs = useApi(ajouterClasse("/api/devoirs", classeFiltre), [classeFiltre]);
   const [syncing, setSyncing] = useState(false);
   const prenom = me?.isAdmin ? "Maître Fantôme" : prenomDe(me?.eleve?.nom);
   const suggestion = suggestionIA.data?.id ? suggestionIA.data : null;

@@ -1,15 +1,15 @@
 import { ChevronRight } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
-import { useApi } from "../api";
+import { useApi, ajouterClasse } from "../api";
 import { Loading, ApiError, EmptyState, ScreenHeader, IndicateursCours } from "../components/Shared";
 
 /* ------------------------------------------------------------------ */
 /* Matières                                                             */
 /* ------------------------------------------------------------------ */
 
-export function SubjectsScreen({ onOpenSubject }) {
+export function SubjectsScreen({ onOpenSubject, classeFiltre }) {
   const { C, colorFor } = useTheme();
-  const matieres = useApi("/api/matieres");
+  const matieres = useApi(ajouterClasse("/api/matieres", classeFiltre), [classeFiltre]);
   return (
     <div>
       <div style={{ padding: "20px 20px 4px" }}>
@@ -46,9 +46,9 @@ export function SubjectsScreen({ onOpenSubject }) {
 /* Détail matière                                                       */
 /* ------------------------------------------------------------------ */
 
-export function SubjectDetail({ subjectId, subjectName, onBack, onOpenCours }) {
+export function SubjectDetail({ subjectId, subjectName, onBack, onOpenCours, classeFiltre }) {
   const { C, colorFor } = useTheme();
-  const cours = useApi(`/api/matieres/${subjectId}/cours`, [subjectId]);
+  const cours = useApi(ajouterClasse(`/api/matieres/${subjectId}/cours`, classeFiltre), [subjectId, classeFiltre]);
   const notes = useApi(`/api/matieres/${subjectId}/notes`, [subjectId]);
   const { color } = colorFor(subjectId);
 

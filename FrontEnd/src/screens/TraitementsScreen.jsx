@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { ChevronRight, ListChecks, CheckCircle2, XCircle, Loader2, Sparkles, RotateCcw, RefreshCw, FileText, Clock, Check, X, ShieldCheck } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
-import { API_BASE, useApi, messageErreur } from "../api";
+import { API_BASE, useApi, messageErreur, ajouterClasse } from "../api";
 import { Loading, ApiError, EmptyState, ScreenHeader, SousMenu, SOUS_MENU_EN_ATTENTE, SOUS_MENU_NON_TRAITES } from "../components/Shared";
 import { ResultatFormatte } from "../components/ResultatFormatte";
 
@@ -111,11 +111,11 @@ const MESSAGES_VIDES = {
   demandes: "Aucune demande de régénération en attente.",
 };
 
-export function TraitementsScreen({ onOpenTraitement }) {
+export function TraitementsScreen({ onOpenTraitement, classeFiltre }) {
   const { C } = useTheme();
-  const traitements = useApi("/api/traitements");
-  const nonTraites = useApi("/api/documents/non-transcrits");
-  const coursNonGeneres = useApi("/api/cours/non-generes");
+  const traitements = useApi(ajouterClasse("/api/traitements", classeFiltre), [classeFiltre]);
+  const nonTraites = useApi(ajouterClasse("/api/documents/non-transcrits", classeFiltre), [classeFiltre]);
+  const coursNonGeneres = useApi(ajouterClasse("/api/cours/non-generes", classeFiltre), [classeFiltre]);
   const [sousMenu, setSousMenu] = useState("pronote");
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState(null);

@@ -5,7 +5,7 @@ import { Ghost, Moon, Sun } from "lucide-react";
 import { ThemeContext, uiFont, glowText, makeColorFor, LIGHT, DARK } from "./theme";
 import { useMe } from "./api";
 
-import { Nav, AuthControl, AdminControl, RetroGrid } from "./components/Nav";
+import { Nav, AuthControl, AdminControl, RetroGrid, ClasseFilterControl } from "./components/Nav";
 
 import { HomeScreen } from "./screens/HomeScreen";
 import { SubjectsScreen, SubjectDetail } from "./screens/SubjectsScreen";
@@ -27,6 +27,7 @@ export default function App() {
   const [themeName, setThemeName] = useState("dark");
   const [tab, setTab] = useState("home");
   const [stack, setStack] = useState([]);
+  const [classeFiltre, setClasseFiltre] = useState(null);
   const me = useMe();
 
   const C = themeName === "dark" ? DARK : LIGHT;
@@ -84,7 +85,7 @@ export default function App() {
     // dans l'en-tête).
     content = top?.screen === "login" ? <LoginScreen me={me} onBack={pop} /> : <LandingScreen onLogin={requireLogin} />;
   } else if (top?.screen === "subject") {
-    content = <SubjectDetail subjectId={top.params.id} subjectName={top.params.nom} onBack={pop} onOpenCours={openCours} />;
+    content = <SubjectDetail subjectId={top.params.id} subjectName={top.params.nom} onBack={pop} onOpenCours={openCours} classeFiltre={classeFiltre} />;
   } else if (top?.screen === "cours") {
     content = <CoursDetail coursId={top.params.id} onBack={pop} me={me} onRequireLogin={requireLogin} onOpenTraitement={openTraitement} />;
   } else if (top?.screen === "login") {
@@ -92,17 +93,17 @@ export default function App() {
   } else if (top?.screen === "traitement") {
     content = <TraitementDetail traitementId={top.params.id} onBack={pop} onOpenCours={openCours} />;
   } else if (tab === "home") {
-    content = <HomeScreen me={me} onOpenCours={openCours} />;
+    content = <HomeScreen me={me} onOpenCours={openCours} classeFiltre={classeFiltre} />;
   } else if (tab === "subjects") {
-    content = <SubjectsScreen onOpenSubject={openSubject} />;
+    content = <SubjectsScreen onOpenSubject={openSubject} classeFiltre={classeFiltre} />;
   } else if (tab === "search") {
-    content = <SearchScreen onOpenSubject={openSubject} onOpenCours={openCours} />;
+    content = <SearchScreen onOpenSubject={openSubject} onOpenCours={openCours} classeFiltre={classeFiltre} />;
   } else if (tab === "assistant") {
     content = <AssistantScreen me={me} onRequireLogin={requireLogin} />;
   } else if (tab === "profil" && me.eleve) {
     content = <ProfilScreen />;
   } else if (tab === "traitements" && isAdmin) {
-    content = <TraitementsScreen onOpenTraitement={openTraitement} />;
+    content = <TraitementsScreen onOpenTraitement={openTraitement} classeFiltre={classeFiltre} />;
   } else if (tab === "eleves" && isAdmin) {
     content = <ElevesScreen />;
   } else if (tab === "parametres" && isAdmin) {
@@ -143,6 +144,7 @@ export default function App() {
               </span>
             </div>
             <div className="flex items-center gap-2">
+              {isAdmin && <ClasseFilterControl classeFiltre={classeFiltre} onChange={setClasseFiltre} />}
               <AuthControl me={me} onLogin={requireLogin} />
               <AdminControl me={me} onOpenLogin={openAdminLogin} />
               <button
