@@ -5,7 +5,11 @@ Numéro de version affiché dans l'app (voir `FrontEnd/package.json`, injecté
 via `vite.config.js`) — à incrémenter à chaque publication sur l'OptiPlex,
 avec une nouvelle entrée ici.
 
-## [0.3.10] — en cours
+## [0.4.0] — en cours
+
+Nouvelle session de retours (classe 2F) après le polish flashcards/quiz —
+prochaine étape décidée avec les retours : gamification (streaks/XP/
+ligues), volontairement mise en attente jusque-là.
 
 ### Added
 - Mode examen (flashcards/quiz) plus vivant : retournement de carte pour
