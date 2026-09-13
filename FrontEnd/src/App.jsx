@@ -90,7 +90,7 @@ export default function App() {
   } else if (top?.screen === "traitement") {
     content = <TraitementDetail traitementId={top.params.id} onBack={pop} onOpenCours={openCours} />;
   } else if (tab === "home") {
-    content = <HomeScreen me={me} onOpenSubject={openSubject} onOpenCours={openCours} />;
+    content = <HomeScreen me={me} onOpenCours={openCours} />;
   } else if (tab === "subjects") {
     content = <SubjectsScreen onOpenSubject={openSubject} />;
   } else if (tab === "search") {

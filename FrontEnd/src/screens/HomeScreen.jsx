@@ -8,9 +8,9 @@ import { Loading, ApiError, EmptyState, SectionLabel, Divider, IndicateursCours,
 /* Accueil                                                              */
 /* ------------------------------------------------------------------ */
 
-export function HomeScreen({ me, onOpenSubject, onOpenCours }) {
+export function HomeScreen({ me, onOpenCours }) {
   const { C, colorFor } = useTheme();
-  const matieres = useApi("/api/matieres");
+  const duJour = useApi("/api/cours/du-jour");
   const recents = useApi("/api/cours/recents?limit=5");
   const devoirs = useApi("/api/devoirs");
   const [syncing, setSyncing] = useState(false);
@@ -21,10 +21,10 @@ export function HomeScreen({ me, onOpenSubject, onOpenCours }) {
     try {
       await fetch(`${API_BASE}/api/sync`, { method: "POST" });
     } catch (e) {
-      /* remonté visuellement via matieres.error au prochain reload si le serveur est injoignable */
+      /* remonté visuellement via duJour.error au prochain reload si le serveur est injoignable */
     }
     setTimeout(() => {
-      matieres.reload();
+      duJour.reload();
       recents.reload();
       devoirs.reload();
       setSyncing(false);
@@ -50,27 +50,35 @@ export function HomeScreen({ me, onOpenSubject, onOpenCours }) {
       </div>
 
       <section style={{ padding: "18px 20px 4px" }}>
-        <SectionLabel>Mes matières</SectionLabel>
-        {matieres.loading && <Loading />}
-        {matieres.error && <ApiError message={matieres.error} onRetry={matieres.reload} />}
-        {matieres.data && matieres.data.length === 0 && (
-          <EmptyState text="Aucune matière pour l'instant." sub="Lance une synchronisation Pronote pour importer tes cours." />
+        <SectionLabel>Emploi du temps du jour</SectionLabel>
+        {duJour.loading && <Loading />}
+        {duJour.error && <ApiError message={duJour.error} onRetry={duJour.reload} />}
+        {duJour.data && duJour.data.length === 0 && (
+          <EmptyState text="Rien de prévu aujourd'hui." sub="Profites-en pour réviser un cours déjà passé. 👻" />
         )}
-        {matieres.data && matieres.data.length > 0 && (
-          <div className="gc-grid" style={{ marginTop: 10 }}>
-            {matieres.data.map((m) => {
-              const { color } = colorFor(m.id);
+        {duJour.data && duJour.data.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
+            {duJour.data.map((c) => {
+              const { color } = colorFor(c.matiere_id);
               return (
                 <button
-                  key={m.id}
-                  onClick={() => onOpenSubject(m.id, m.nom)}
-                  style={{ display: "flex", alignItems: "center", gap: 12, background: C.white, border: `1px solid ${C.line}`, borderLeft: `4px solid ${color}`, borderRadius: 10, padding: "12px 14px", cursor: "pointer", textAlign: "left", fontFamily: uiFont }}
+                  key={c.id}
+                  onClick={() => onOpenCours(c.id)}
+                  style={{ display: "flex", alignItems: "center", gap: 12, background: C.white, border: `1px solid ${C.line}`, borderLeft: `4px solid ${color}`, borderRadius: 10, padding: "12px 14px", cursor: "pointer", textAlign: "left", fontFamily: uiFont, opacity: c.annule ? 0.65 : 1 }}
                 >
+                  <div style={{ fontSize: 12.5, color: C.inkSoft, fontWeight: 700, width: 42, flexShrink: 0 }}>
+                    {c.heure_debut}
+                  </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 14.5, color: C.ink, fontWeight: 600 }}>{m.nom}</div>
-                    <div style={{ fontSize: 12, color: C.inkSoft, marginTop: 2 }}>
-                      {m.nb_cours} cours · {m.nb_documents} documents
+                    <div style={{ fontSize: 14.5, color: C.ink, fontWeight: 600 }}>
+                      {c.matiere}
+                      {c.groupe && <span style={{ color: C.inkFaint, fontWeight: 500 }}> · {c.groupe}</span>}
                     </div>
+                    <div style={{ fontSize: 12, color: C.inkSoft, marginTop: 2 }}>
+                      {c.professeur}
+                      {c.salle && ` · salle ${c.salle}`}
+                    </div>
+                    <IndicateursCours c={c} />
                   </div>
                   <ChevronRight size={16} color={C.inkFaint} />
                 </button>

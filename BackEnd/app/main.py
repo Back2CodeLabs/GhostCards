@@ -10,7 +10,7 @@ import logging
 import secrets
 import sys
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -412,6 +412,33 @@ def list_notes_matiere(matiere_id: int, request: Request):
                    FROM notes_pronote WHERE matiere_id = ? AND eleve_id = ? ORDER BY date DESC""",
                 (matiere_id, eleve_id),
             ).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.get("/api/cours/du-jour")
+def cours_du_jour(request: Request):
+    """
+    Emploi du temps du jour — affiché sur l'accueil à la place de la liste
+    des matières (déjà consultable depuis l'onglet Matières, doublon
+    inutile sur l'accueil) : ce qu'un élève veut voir en arrivant sur le
+    site, c'est son planning du jour, cours annulés compris (pour le
+    savoir, pas pour les cacher).
+
+    Déclarée ici, AVANT /api/cours/{cours_id} : une route à paramètre du
+    même préfixe capturerait sinon "du-jour" comme un id (voir HANDOFF.md,
+    piège déjà rencontré avec /api/cours/recents).
+    """
+    _require_session(request)
+    aujourdhui = date.today().isoformat()
+    with db.session() as conn:
+        rows = conn.execute(
+            f"""SELECT c.id, c.heure_debut, c.heure_fin, c.professeur, c.salle, c.groupe, c.memo,
+                       c.annule, c.statut, c.devoir_surveille, c.ia_statut, m.nom AS matiere, m.id AS matiere_id,
+                       {_COMPTES_COURS_SQL}
+                FROM cours c JOIN matieres m ON m.id = c.matiere_id
+                WHERE c.date = ? ORDER BY c.heure_debut""",
+            (aujourdhui,),
+        ).fetchall()
         return [dict(r) for r in rows]
 
 
