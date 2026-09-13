@@ -5,7 +5,17 @@ Numéro de version affiché dans l'app (voir `FrontEnd/package.json`, injecté
 via `vite.config.js`) — à incrémenter à chaque publication sur l'OptiPlex,
 avec une nouvelle entrée ici.
 
-## [0.4.0] — en cours
+## [0.4.1] — en cours
+
+### Added
+- Aperçu de lien (Open Graph/Twitter) au partage de l'URL ghostschool.app —
+  titre, description et image plutôt qu'une carte vide.
+- Onglet "Profil" pour les élèves : associer sa propre clé Gemini
+  (facultatif, gratuite) à la génération IA — prime sur le moteur choisi
+  par l'admin pour les générations que CET élève déclenche, pour répartir
+  le quota entre plusieurs clés personnelles.
+
+## [0.4.0] — 2026-09-13
 
 Nouvelle session de retours (classe 2F) après le polish flashcards/quiz —
 prochaine étape décidée avec les retours : gamification (streaks/XP/
