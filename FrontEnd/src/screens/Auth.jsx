@@ -1,8 +1,9 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Ghost, Upload, ShieldCheck } from "lucide-react";
 import { useTheme, uiFont, glowText } from "../theme";
 import { messageErreur } from "../api";
 import { ScreenHeader } from "../components/Shared";
+import { CropQrCode } from "../components/CropQr";
 
 /* ------------------------------------------------------------------ */
 /* Connexion — pairage avec le compte Pronote personnel de l'élève :     */
@@ -14,7 +15,9 @@ import { ScreenHeader } from "../components/Shared";
 export function LoginScreen({ me, onBack }) {
   const { C } = useTheme();
   const [mode, setMode] = useState("photo"); // "photo" | "json" — voir le lien "Coller le code à la place"
-  const [fichier, setFichier] = useState(null);
+  const [photoBrute, setPhotoBrute] = useState(null); // data URL en attente de recadrage
+  const [fichier, setFichier] = useState(null); // photo déjà recadrée, prête à être envoyée
+  const [apercuUrl, setApercuUrl] = useState(null);
   const [qrJsonTexte, setQrJsonTexte] = useState("");
   const [pin, setPin] = useState("");
   const [consentement, setConsentement] = useState(false);
@@ -23,6 +26,31 @@ export function LoginScreen({ me, onBack }) {
   const fileInputRef = useRef(null);
 
   const qrPret = mode === "photo" ? !!fichier : qrJsonTexte.trim().length > 0;
+
+  // Aperçu de la photo recadrée (miniature affichée une fois validée) —
+  // révoqué à chaque changement pour ne pas fuir des object URL.
+  useEffect(() => {
+    if (!fichier) {
+      setApercuUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(fichier);
+    setApercuUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [fichier]);
+
+  function choisirPhoto(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setPhotoBrute(reader.result);
+    reader.readAsDataURL(file);
+  }
+
+  function changerPhoto() {
+    setPhotoBrute(null);
+    setFichier(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
 
   async function submit() {
     if (!qrPret || pin.length !== 4 || !consentement || submitting) return;
@@ -60,22 +88,49 @@ export function LoginScreen({ me, onBack }) {
         </p>
 
         {mode === "photo" ? (
-          <div
-            onClick={() => fileInputRef.current?.click()}
-            style={{ cursor: "pointer", background: C.paperDim, border: `1px dashed ${C.line}`, borderRadius: 12, padding: "22px 16px", marginBottom: 8, maxWidth: 340, marginLeft: "auto", marginRight: "auto" }}
-          >
-            <Upload size={22} color={C.inkSoft} style={{ marginBottom: 6 }} />
-            <p style={{ fontFamily: uiFont, fontSize: 13, color: C.ink, margin: 0, fontWeight: 600 }}>
-              {fichier ? fichier.name : "Choisir la photo du QR code"}
-            </p>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              onChange={(e) => setFichier(e.target.files?.[0] || null)}
-              style={{ display: "none" }}
+          photoBrute ? (
+            <CropQrCode
+              imageSrc={photoBrute}
+              onValider={(f) => {
+                setFichier(f);
+                setPhotoBrute(null);
+              }}
+              onAnnuler={changerPhoto}
             />
-          </div>
+          ) : fichier ? (
+            <div style={{ marginBottom: 8 }}>
+              <img
+                src={apercuUrl}
+                alt="QR code recadré"
+                style={{ width: 150, height: 150, objectFit: "cover", borderRadius: 12, border: `1px solid ${C.line}` }}
+              />
+              <div>
+                <button
+                  onClick={changerPhoto}
+                  style={{ display: "block", margin: "8px auto 0", background: "transparent", border: "none", color: C.inkFaint, fontFamily: uiFont, fontSize: 11.5, textDecoration: "underline", cursor: "pointer" }}
+                >
+                  Changer la photo
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              style={{ cursor: "pointer", background: C.paperDim, border: `1px dashed ${C.line}`, borderRadius: 12, padding: "22px 16px", marginBottom: 8, maxWidth: 340, marginLeft: "auto", marginRight: "auto" }}
+            >
+              <Upload size={22} color={C.inkSoft} style={{ marginBottom: 6 }} />
+              <p style={{ fontFamily: uiFont, fontSize: 13, color: C.ink, margin: 0, fontWeight: 600 }}>
+                Choisir la photo du QR code
+              </p>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={(e) => choisirPhoto(e.target.files?.[0] || null)}
+                style={{ display: "none" }}
+              />
+            </div>
+          )
         ) : (
           <textarea
             value={qrJsonTexte}
