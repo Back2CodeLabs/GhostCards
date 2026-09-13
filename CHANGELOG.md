@@ -5,7 +5,25 @@ Numéro de version affiché dans l'app (voir `FrontEnd/package.json`, injecté
 via `vite.config.js`) — à incrémenter à chaque publication sur l'OptiPlex,
 avec une nouvelle entrée ici.
 
-## [0.4.2] — en cours
+## [0.5.0] — en cours
+
+### Added
+- Support de plusieurs classes (2F, 2E...) sur la même instance : chaque
+  cours/devoir est désormais rattaché à une classe (dérivée automatiquement
+  du compte Pronote qui l'a synchronisé), un élève ne voit que le contenu
+  de la sienne. Écran Paramétrage → Pronote : gestion d'une vraie liste de
+  classes autorisées au pairage (remplace l'ancien champ "Classe attendue"
+  à une seule valeur). Écran admin : sélecteur pour filtrer Accueil/
+  Matières/Recherche/Traitements/Élèves par classe, ou tout voir mélangé
+  par défaut.
+
+### Fixed
+- Corrige une collision possible dans la déduplication des cours/devoirs
+  entre deux classes ayant le même professeur/matière au même créneau
+  (fréquent dans un emploi du temps réel) — la clé inclut désormais la
+  classe.
+
+## [0.4.2] — 2026-09-13
 
 ### Fixed
 - `og-image.png` (aperçu de lien) : les lettres fantômes de "Ghost School"
