@@ -127,6 +127,70 @@ function ClassesManager({ C, labelStyle, inputStyle }) {
   );
 }
 
+// Matières à exclure : une case à cocher par matière DÉJÀ récupérée par la
+// synchro (voir GET /api/parametres/matieres), plutôt qu'une liste de noms
+// tapés à l'avance — exclure une matière la masque (accueil, matières,
+// devoirs...) mais ne l'empêche jamais d'être synchronisée (voir Services/
+// pronote_sync.py, qui ingère tout sans exception depuis ce changement).
+function MatieresExclues({ C, labelStyle }) {
+  const matieres = useApi("/api/parametres/matieres");
+  const [enCoursId, setEnCoursId] = useState(null);
+  const [erreur, setErreur] = useState(null);
+
+  async function basculer(m) {
+    setEnCoursId(m.id);
+    setErreur(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/matieres/${m.id}/exclure`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ exclue: !m.exclue }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Erreur ${res.status}`);
+      }
+      matieres.reload();
+    } catch (e) {
+      setErreur(messageErreur(e, "Impossible de modifier cette matière."));
+    } finally {
+      setEnCoursId(null);
+    }
+  }
+
+  return (
+    <div>
+      <label style={labelStyle}>MATIÈRES À EXCLURE</label>
+      {matieres.loading && <Loading />}
+      {matieres.data && matieres.data.length === 0 && (
+        <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: 0 }}>
+          Aucune matière récupérée pour l'instant — reviens ici après une première synchronisation.
+        </p>
+      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {matieres.data?.map((m) => (
+          <label
+            key={m.id}
+            style={{ display: "flex", alignItems: "center", gap: 8, cursor: enCoursId === m.id ? "default" : "pointer", padding: "4px 0", opacity: enCoursId === m.id ? 0.6 : 1 }}
+          >
+            <input
+              type="checkbox"
+              checked={!!m.exclue}
+              disabled={enCoursId === m.id}
+              onChange={() => basculer(m)}
+              style={{ accentColor: C.haunt }}
+            />
+            <span style={{ fontFamily: uiFont, fontSize: 13, color: C.ink }}>{m.nom}</span>
+          </label>
+        ))}
+      </div>
+      {erreur && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "6px 0 0" }}>{erreur}</p>}
+      <p style={{ fontFamily: uiFont, fontSize: 11.5, color: C.inkFaint, margin: "8px 0 0" }}>
+        Certains créneaux ne sont pas de vraies matières (réunions, journées spéciales...) — coche-les
+        pour les masquer de l'app. Toujours synchronisées en arrière-plan, juste invisibles.
+      </p>
+    </div>
+  );
+}
+
 function formatDateHeure(iso) {
   const d = new Date(iso);
   return `${d.toLocaleDateString("fr-FR")} à ${d.toLocaleTimeString("fr-FR")}`;
@@ -182,7 +246,6 @@ export function ParametresScreen() {
   const [pronoteUrl, setPronoteUrl] = useState("");
   const [syncDaysBack, setSyncDaysBack] = useState("");
   const [syncDaysForward, setSyncDaysForward] = useState("");
-  const [matieresExclues, setMatieresExclues] = useState("");
   const [ocrEngine, setOcrEngine] = useState("paddleocr");
   const [paddleocrEnableMkldnn, setPaddleocrEnableMkldnn] = useState(false);
   const [verifMoteur, setVerifMoteur] = useState("claude");
@@ -209,7 +272,6 @@ export function ParametresScreen() {
       setPronoteUrl(parametres.data.pronote_url || "");
       setSyncDaysBack(String(parametres.data.sync_days_back ?? ""));
       setSyncDaysForward(String(parametres.data.sync_days_forward ?? ""));
-      setMatieresExclues(parametres.data.matieres_exclues || "");
       setOcrEngine(parametres.data.ocr_engine || "paddleocr");
       setPaddleocrEnableMkldnn(parametres.data.paddleocr_enable_mkldnn ?? false);
       setVerifMoteur(parametres.data.verif_moteur || "claude");
@@ -267,7 +329,6 @@ export function ParametresScreen() {
         pronote_url: pronoteUrl.trim() || null,
         sync_days_back: syncDaysBack.trim() ? parseInt(syncDaysBack, 10) : null,
         sync_days_forward: syncDaysForward.trim() ? parseInt(syncDaysForward, 10) : null,
-        matieres_exclues: matieresExclues,
         ocr_engine: ocrEngine,
         paddleocr_enable_mkldnn: paddleocrEnableMkldnn,
         verif_moteur: verifMoteur,
@@ -389,20 +450,7 @@ export function ParametresScreen() {
               <p style={{ fontFamily: uiFont, fontSize: 11.5, color: C.inkFaint, margin: 0 }}>
                 Fenêtre récupérée à chaque synchronisation autour d'aujourd'hui (ex. 3 jours en arrière, 10 en avant).
               </p>
-              <div>
-                <label style={labelStyle}>MATIÈRES À EXCLURE</label>
-                <input
-                  value={matieresExclues}
-                  onChange={(e) => setMatieresExclues(e.target.value)}
-                  placeholder="Réunion parents-profs, Journée du sport scolaire"
-                  style={inputStyle}
-                />
-                <p style={{ fontFamily: uiFont, fontSize: 11.5, color: C.inkFaint, margin: "4px 0 0" }}>
-                  Noms séparés par des virgules, tels qu'affichés dans Pronote (accents/majuscules sans
-                  importance). Certains créneaux ne sont pas de vraies matières (réunions, journées
-                  spéciales...) — ceux listés ici ne seront plus importés à la prochaine synchronisation.
-                </p>
-              </div>
+              <MatieresExclues C={C} labelStyle={labelStyle} />
               <ClassesManager C={C} labelStyle={labelStyle} inputStyle={inputStyle} />
             </div>
           </div>
