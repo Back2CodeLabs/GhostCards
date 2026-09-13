@@ -5,7 +5,15 @@ Numéro de version affiché dans l'app (voir `FrontEnd/package.json`, injecté
 via `vite.config.js`) — à incrémenter à chaque publication sur l'OptiPlex,
 avec une nouvelle entrée ici.
 
-## [0.3.4] — en cours
+## [0.3.5] — en cours
+
+### Added
+- Vraie page d'accueil (pitch + bouton "Se connecter") pour un visiteur non
+  connecté, au lieu d'imposer directement le formulaire de pairage Pronote
+  (retour du premier élève testeur). Salutation personnalisée une fois
+  connecté : prénom de l'élève, ou "Maître Fantôme" pour l'admin.
+
+## [0.3.4] — 2026-09-13
 
 ### Fixed
 - Un même élève re-pairant son compte Pronote (ex. après une déconnexion
