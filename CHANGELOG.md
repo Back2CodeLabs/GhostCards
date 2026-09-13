@@ -5,7 +5,19 @@ Numéro de version affiché dans l'app (voir `FrontEnd/package.json`, injecté
 via `vite.config.js`) — à incrémenter à chaque publication sur l'OptiPlex,
 avec une nouvelle entrée ici.
 
-## [0.3.3] — en cours
+## [0.3.4] — en cours
+
+### Fixed
+- Un même élève re-pairant son compte Pronote (ex. après une déconnexion
+  de l'appli côté téléphone) créait une **deuxième ligne élève en double**
+  au lieu de mettre à jour la sienne : `ClientInfo.id` (utilisé jusque-là
+  comme identifiant stable côté Pronote) est en réalité régénéré à chaque
+  pairage, pas un identifiant de compte durable. Le pairage matche
+  désormais par nom (classe fermée à 36 élèves connus). Migration
+  automatique au démarrage pour fusionner les doublons déjà présents en
+  base (repéré sur un vrai doublon en production).
+
+## [0.3.3] — 2026-09-13
 
 ### Fixed
 - `BackEnd/deploy/Caddyfile` échouait à démarrer sur l'OptiPlex :
