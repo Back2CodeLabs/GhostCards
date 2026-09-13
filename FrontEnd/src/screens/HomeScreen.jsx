@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronRight, RefreshCw } from "lucide-react";
+import { ChevronRight, RefreshCw, Sparkles } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 import { API_BASE, useApi } from "../api";
 import { Loading, ApiError, EmptyState, SectionLabel, Divider, IndicateursCours, prenomDe } from "../components/Shared";
@@ -10,11 +10,13 @@ import { Loading, ApiError, EmptyState, SectionLabel, Divider, IndicateursCours,
 
 export function HomeScreen({ me, onOpenCours }) {
   const { C, colorFor } = useTheme();
+  const suggestionIA = useApi("/api/cours/suggestion-ia");
   const duJour = useApi("/api/cours/du-jour");
   const recents = useApi("/api/cours/recents?limit=5");
   const devoirs = useApi("/api/devoirs");
   const [syncing, setSyncing] = useState(false);
   const prenom = me?.isAdmin ? "Maître Fantôme" : prenomDe(me?.eleve?.nom);
+  const suggestion = suggestionIA.data?.id ? suggestionIA.data : null;
 
   async function refresh() {
     setSyncing(true);
@@ -24,6 +26,7 @@ export function HomeScreen({ me, onOpenCours }) {
       /* remonté visuellement via duJour.error au prochain reload si le serveur est injoignable */
     }
     setTimeout(() => {
+      suggestionIA.reload();
       duJour.reload();
       recents.reload();
       devoirs.reload();
@@ -48,6 +51,31 @@ export function HomeScreen({ me, onOpenCours }) {
           {syncing ? "Synchro…" : "Actualiser"}
         </button>
       </div>
+
+      {suggestion && (
+        <section style={{ padding: "4px 20px 4px" }}>
+          <button
+            onClick={() => onOpenCours(suggestion.id)}
+            style={{
+              display: "flex", alignItems: "center", gap: 14, width: "100%", textAlign: "left",
+              background: C.haunt, border: "none", borderRadius: 14, padding: "16px 18px", cursor: "pointer", fontFamily: uiFont,
+            }}
+          >
+            <Sparkles size={26} color={C.onAccent} style={{ flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.onAccent }}>
+                {suggestion.pret ? "Ton quiz est prêt ✨" : "Quiz du jour : découvre la génération IA"}
+              </div>
+              <div style={{ fontSize: 12.5, color: C.onAccent, opacity: 0.85, marginTop: 2 }}>
+                {suggestion.pret
+                  ? `Révise ${suggestion.matiere} avec les flashcards et le quiz déjà générés.`
+                  : `${suggestion.titre || suggestion.matiere} peut être transformé en résumé, flashcards et quiz par l'IA.`}
+              </div>
+            </div>
+            <ChevronRight size={18} color={C.onAccent} />
+          </button>
+        </section>
+      )}
 
       <section style={{ padding: "18px 20px 4px" }}>
         <SectionLabel>Emploi du temps du jour</SectionLabel>

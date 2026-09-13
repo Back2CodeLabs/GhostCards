@@ -415,6 +415,55 @@ def list_notes_matiere(matiere_id: int, request: Request):
         return [dict(r) for r in rows]
 
 
+@app.get("/api/cours/suggestion-ia")
+def suggestion_ia(request: Request):
+    """
+    Un seul cours à mettre en avant sur l'accueil ("Quiz du jour") pour que
+    la génération IA (résumé/flashcards/quiz) saute aux yeux — retour de
+    terrain : un élève ne savait pas que la fonctionnalité existait,
+    reléguée à une petite icône dans la liste des cours (voir
+    IndicateursCours, FrontEnd/src/components/Shared.jsx).
+
+    Priorité 1 : le cours le plus récent déjà prêt (quiz à réviser tout de
+    suite). Priorité 2, sinon : le plus récent qui a de quoi générer mais
+    ne l'a pas encore été (même condition que /api/cours/non-generes,
+    réservé lui à l'admin) — invite à découvrir "Générer" en ouvrant ce
+    cours. `{}` si aucun des deux n'existe (classe toute neuve, sans
+    contenu récupéré nulle part encore).
+
+    Déclarée ici, AVANT /api/cours/{cours_id} : une route à paramètre du
+    même préfixe capturerait sinon "suggestion-ia" comme un id (voir
+    HANDOFF.md, piège déjà rencontré avec /api/cours/recents).
+    """
+    _require_session(request)
+    with db.session() as conn:
+        pret = conn.execute(
+            """SELECT c.id, m.nom AS matiere, c.titre
+               FROM cours c JOIN matieres m ON m.id = c.matiere_id
+               WHERE c.ia_statut = 'pret'
+               ORDER BY c.date DESC, c.heure_debut DESC LIMIT 1"""
+        ).fetchone()
+        if pret:
+            return {"id": pret["id"], "matiere": pret["matiere"], "titre": pret["titre"], "pret": True}
+
+        a_generer = conn.execute(
+            """SELECT c.id, m.nom AS matiere, c.titre
+               FROM cours c JOIN matieres m ON m.id = c.matiere_id
+               WHERE c.ia_statut IN ('absent', 'echec')
+                 AND (
+                   (c.description IS NOT NULL AND c.description != '')
+                   OR EXISTS (
+                     SELECT 1 FROM documents d
+                     WHERE d.cours_id = c.id AND d.texte_extrait IS NOT NULL AND d.texte_extrait != ''
+                   )
+                 )
+               ORDER BY c.date DESC, c.heure_debut DESC LIMIT 1"""
+        ).fetchone()
+        if a_generer:
+            return {"id": a_generer["id"], "matiere": a_generer["matiere"], "titre": a_generer["titre"], "pret": False}
+        return {}
+
+
 @app.get("/api/cours/du-jour")
 def cours_du_jour(request: Request):
     """
