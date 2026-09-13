@@ -471,6 +471,27 @@ déprécié.
   antérieurs au dédoublonnage automatique (celui-ci ne s'applique qu'aux
   fichiers téléchargés après son déploiement, voir plus haut).
 
+- **Gamification** (streaks/XP/ligues, retour de Valentin le 13 septembre
+  2026) : volontairement mise en attente le temps d'avoir plus de retours
+  de la classe — la ligue/leaderboard en particulier mérite une décision
+  de principe avant de développer (comparer les scores de 36 ados de
+  15-16 ans peut créer une pression sociale non désirée), indépendamment
+  de l'effort technique.
+- **Synchro Pronote proxifiée par l'appareil de chaque élève** (question
+  posée le 13 septembre 2026, à titre préventif — aucun souci constaté).
+  Pas réaliste tel quel (`pronotepy` est du Python côté serveur, pas
+  portable en PWA) ; la seule version faisable serait un tunnel réseau
+  inverse (l'OptiPlex garde tout le code, mais fait transiter ses
+  requêtes Pronote via une connexion ouverte depuis le téléphone de
+  l'élève, pour que ça apparaisse venir de son IP plutôt que de
+  l'OptiPlex). Pas entrepris : résoudrait un problème pas encore observé
+  (aucune erreur de rate-limit dans `sync_log`/`traitements` depuis le
+  pairage multi-comptes, l'étalement de 5 s entre comptes semble
+  suffire), pour une fiabilité moindre (un téléphone endormi/hors wifi
+  casserait silencieusement la synchro de cet élève, contraintes
+  d'exécution en arrière-plan iOS/Android). À reconsidérer seulement si
+  Pronote se met vraiment à bloquer/ralentir l'OptiPlex.
+
 ## Bugs déjà rencontrés et corrigés (ne pas réintroduire)
 
 - `load_dotenv()` n'était jamais appelé dans `config.py` malgré
