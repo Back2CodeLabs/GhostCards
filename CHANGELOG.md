@@ -5,7 +5,15 @@ Numéro de version affiché dans l'app (voir `FrontEnd/package.json`, injecté
 via `vite.config.js`) — à incrémenter à chaque publication sur l'OptiPlex,
 avec une nouvelle entrée ici.
 
-## [0.3.9] — en cours
+## [0.3.10] — en cours
+
+### Added
+- Mode examen (flashcards/quiz) plus vivant : retournement de carte pour
+  voir la réponse, barre de progression continue sur toute la session,
+  petit retour visuel (check/croix) avant de passer à la carte suivante,
+  légère animation d'entrée sur chaque nouvelle carte/question.
+
+## [0.3.9] — 2026-09-13
 
 ### Added
 - Bandeau "Quiz du jour" tout en haut de l'accueil : met en avant un cours
