@@ -491,6 +491,17 @@ déprécié.
   casserait silencieusement la synchro de cet élève, contraintes
   d'exécution en arrière-plan iOS/Android). À reconsidérer seulement si
   Pronote se met vraiment à bloquer/ralentir l'OptiPlex.
+- **Génération manuelle hors Ghost School, injectée ensuite** (demandé
+  pour la version 0.6.0, le 13 septembre 2026) : un élève pourrait générer
+  ses flashcards/quiz avec sa propre IA (hors Ghost School — ex. ChatGPT/
+  Gemini directement), à partir d'un prompt fourni par l'app, puis
+  importer le résultat dans Ghost School. Pas encore cadré : il faudra au
+  minimum un endpoint d'import qui valide/parse un contenu JSON externe
+  (même format que `ia_generation.py` attend en sortie — flashcards/quiz),
+  et décider si l'import remplace une génération existante ou s'ajoute
+  (comme "+ 10", ou un nouveau statut `ia_statut` distinct de 'pret' pour
+  distinguer un contenu importé d'un contenu généré par l'app). Prévoir un
+  vrai plan avant de commencer, comme pour le multi-classe.
 
 ## Bugs déjà rencontrés et corrigés (ne pas réintroduire)
 

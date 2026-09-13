@@ -5,7 +5,21 @@ Numéro de version affiché dans l'app (voir `FrontEnd/package.json`, injecté
 via `vite.config.js`) — à incrémenter à chaque publication sur l'OptiPlex,
 avec une nouvelle entrée ici.
 
-## [0.5.0] — en cours
+## [0.5.1] — en cours
+
+### Changed
+- Le sélecteur de classe (menu déroulant dans l'en-tête, admin) devient
+  une rangée d'onglets affichée directement sur Accueil et Matières,
+  toujours visible dès qu'il y a au moins une classe (même une seule).
+- Écran Élèves : deuxième rangée d'onglets pour le groupe (LV2,
+  options...) quand une classe précise est sélectionnée.
+- "Matières à exclure" (Paramétrage → Pronote) se base désormais sur les
+  matières déjà récupérées par la synchro (case à cocher par matière),
+  au lieu d'une liste de noms tapés à l'avance qui empêchait leur import —
+  une matière exclue est maintenant masquée dans l'app, mais toujours
+  synchronisée en arrière-plan.
+
+## [0.5.0] — 2026-09-13
 
 ### Added
 - Support de plusieurs classes (2F, 2E...) sur la même instance : chaque
