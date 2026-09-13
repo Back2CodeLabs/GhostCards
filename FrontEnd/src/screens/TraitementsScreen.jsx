@@ -49,6 +49,7 @@ function traitementTypeInfo(C, type) {
   if (type === "ia_verification") return { label: "Vérification IA", Icon: ShieldCheck, color: C.haunt, soft: C.hauntSoft };
   if (type === "transcription_document" || type === "transcription_note") return { label: "OCR", Icon: FileText, color: C.brick, soft: C.brickSoft };
   if (type === "regeneration_demande") return { label: "Demande de régénération", Icon: Clock, color: C.inkSoft, soft: C.paperDim };
+  if (type === "import_demande") return { label: "Demande d'import manuel", Icon: Clock, color: C.inkSoft, soft: C.paperDim };
   return { label: type, Icon: ListChecks, color: C.inkFaint, soft: C.paperDim };
 }
 
@@ -89,7 +90,7 @@ function categorieTraitement(t) {
   if (t.type === "pronote_sync") return "pronote";
   if (t.type === "ia_generation" || t.type === "ia_completion" || t.type === "ia_verification") return "ia";
   if (t.type === "transcription_document" || t.type === "transcription_note") return "ocr";
-  if (t.type === "regeneration_demande") return "demandes";
+  if (t.type === "regeneration_demande" || t.type === "import_demande") return "demandes";
   return null;
 }
 
@@ -101,6 +102,7 @@ function traitementTitre(t) {
   if (t.type === "transcription_document") return `OCR · Document #${t.cible_id}`;
   if (t.type === "transcription_note") return `OCR · Note #${t.cible_id}`;
   if (t.type === "regeneration_demande") return `Demande de régénération · Cours #${t.cible_id}`;
+  if (t.type === "import_demande") return `Demande d'import manuel · Cours #${t.cible_id}`;
   return `${t.type} · ${t.cible_type} #${t.cible_id}`;
 }
 
@@ -108,7 +110,7 @@ const MESSAGES_VIDES = {
   pronote: "Aucune synchronisation Pronote pour l'instant.",
   ia: "Aucune génération IA pour l'instant.",
   ocr: "Aucune extraction OCR pour l'instant.",
-  demandes: "Aucune demande de régénération en attente.",
+  demandes: "Aucune demande en attente.",
 };
 
 export function TraitementsScreen({ onOpenTraitement, classeFiltre }) {
@@ -341,10 +343,17 @@ export function TraitementsScreen({ onOpenTraitement, classeFiltre }) {
           const { label, color, Icon } = traitementStatutInfo(C, t.statut, syncSansChangement(t));
           if (sousMenu === "demandes") {
             const enAttente = t.statut === "en_attente";
+            // Une demande de régénération n'a encore rien produit (la
+            // génération n'a pas eu lieu) — rien à prévisualiser. Une
+            // demande d'import, elle, contient déjà le contenu collé par
+            // l'élève (`t.resultat`) : l'admin doit pouvoir le relire avant
+            // de valider, d'où la ligne cliquable seulement dans ce cas.
+            const previsualisable = t.type === "import_demande";
             return (
               <div
                 key={t.id}
-                style={{ display: "flex", alignItems: "center", gap: 10, background: C.white, border: `1px solid ${C.line}`, borderLeft: `3px solid ${color}`, borderRadius: 10, padding: "12px 14px", fontFamily: uiFont }}
+                onClick={previsualisable ? () => onOpenTraitement(t.id) : undefined}
+                style={{ display: "flex", alignItems: "center", gap: 10, background: C.white, border: `1px solid ${C.line}`, borderLeft: `3px solid ${color}`, borderRadius: 10, padding: "12px 14px", fontFamily: uiFont, cursor: previsualisable ? "pointer" : "default" }}
               >
                 <Icon size={16} color={color} />
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -356,15 +365,15 @@ export function TraitementsScreen({ onOpenTraitement, classeFiltre }) {
                 {enAttente && (
                   <div className="flex items-center gap-2" style={{ flexShrink: 0 }}>
                     <button
-                      onClick={() => traiterDemande(t.id, "valider")}
+                      onClick={(e) => { e.stopPropagation(); traiterDemande(t.id, "valider"); }}
                       disabled={actingId === t.id}
-                      title="Valider et lancer la régénération"
+                      title={t.type === "import_demande" ? "Valider et appliquer le contenu importé" : "Valider et lancer la régénération"}
                       style={{ display: "flex", alignItems: "center", gap: 4, background: C.hauntSoft, color: C.haunt, border: "none", borderRadius: 8, padding: "7px 10px", fontFamily: uiFont, fontSize: 12, fontWeight: 700, cursor: actingId === t.id ? "default" : "pointer" }}
                     >
                       <Check size={13} /> Valider
                     </button>
                     <button
-                      onClick={() => traiterDemande(t.id, "rejeter")}
+                      onClick={(e) => { e.stopPropagation(); traiterDemande(t.id, "rejeter"); }}
                       disabled={actingId === t.id}
                       title="Rejeter la demande"
                       style={{ display: "flex", alignItems: "center", gap: 4, background: "transparent", color: C.inkFaint, border: `1px solid ${C.line}`, borderRadius: 8, padding: "7px 10px", fontFamily: uiFont, fontSize: 12, fontWeight: 700, cursor: actingId === t.id ? "default" : "pointer" }}
@@ -525,7 +534,7 @@ export function TraitementDetail({ traitementId, onBack, onOpenCours }) {
           </div>
         )}
 
-        {t.type !== "pronote_sync" && (
+        {t.type !== "pronote_sync" && t.type !== "regeneration_demande" && t.type !== "import_demande" && (
           <button
             onClick={relancer}
             disabled={relancing}

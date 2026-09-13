@@ -235,6 +235,55 @@ def construire_prompt_completion(
     return f"{texte}\n\n{consigne}\n\n{COMPLEMENT_JSON_FORMAT}\n"
 
 
+def valider_forme_generation(resultat) -> dict:
+    """
+    Vérifie que `resultat` respecte bien le format `GENERATION_JSON_FORMAT`
+    ci-dessus. Une génération normale (Ollama/Gemini en mode JSON forcé,
+    ou Claude via `parser_json_ia`) n'a jamais eu besoin de cette
+    vérification — un modèle qui répond correctement au format demandé
+    produit une forme correcte, et une réponse mal formée devient de toute
+    façon un `ia_statut='echec'` explicite (voir `generer_pour_cours`).
+    L'import manuel (v0.6.0, BackEnd/app/main.py::importer_manuel_ia) en a
+    besoin car la source n'est contrainte par AUCUN mode JSON de modèle :
+    un élève peut coller n'importe quel texte, et l'erreur doit être
+    signalée tout de suite (400, message actionnable) plutôt que produire
+    un cours cassé plus tard dans ExamMode/ia_verification.
+
+    Lève `GenerationError` (message en français, présentable tel quel à
+    un élève) à la première anomalie trouvée. Renvoie `resultat` inchangé
+    si tout est valide (permet `contenu = valider_forme_generation(...)`).
+    """
+    if not isinstance(resultat, dict):
+        raise GenerationError("Le JSON collé doit être un objet ({...}), pas une liste ou une valeur simple.")
+
+    for cle in ("resume_court", "resume_detaille"):
+        valeur = resultat.get(cle)
+        if not isinstance(valeur, str) or not valeur.strip():
+            raise GenerationError(f'Le champ "{cle}" doit être un texte non vide.')
+
+    flashcards = resultat.get("flashcards")
+    if not isinstance(flashcards, list) or not flashcards:
+        raise GenerationError('Le champ "flashcards" doit être une liste non vide.')
+    for i, fc in enumerate(flashcards, 1):
+        if not isinstance(fc, dict) or not isinstance(fc.get("question"), str) or not isinstance(fc.get("reponse"), str):
+            raise GenerationError(f'Flashcard {i} : il manque "question" ou "reponse" (ou ce ne sont pas des textes).')
+
+    quiz = resultat.get("quiz")
+    if not isinstance(quiz, list) or not quiz:
+        raise GenerationError('Le champ "quiz" doit être une liste non vide.')
+    for i, q in enumerate(quiz, 1):
+        if not isinstance(q, dict) or not isinstance(q.get("question"), str):
+            raise GenerationError(f'Question de quiz {i} : il manque "question" (ou ce n\'est pas un texte).')
+        options = q.get("options")
+        if not isinstance(options, list) or len(options) != 4 or not all(isinstance(o, str) for o in options):
+            raise GenerationError(f'Question de quiz {i} : "options" doit être une liste de 4 textes.')
+        index = q.get("reponse_index")
+        if not isinstance(index, int) or isinstance(index, bool) or not (0 <= index < len(options)):
+            raise GenerationError(f'Question de quiz {i} : "reponse_index" doit être un nombre entre 0 et 3.')
+
+    return resultat
+
+
 def _appeler_ollama(prompt: str, url: str, model: str) -> dict:
     payload = json.dumps({
         "model": model,
@@ -315,6 +364,33 @@ def _client_claude(api_key: str):
     return _anthropic_client
 
 
+def parser_json_ia(texte: str) -> dict:
+    """
+    Parse un JSON potentiellement entouré de texte parasite (phrase
+    d'intro/conclusion, balises markdown ```json ... ```) — extrait à
+    l'origine du seul endroit qui en avait besoin (`_appeler_claude`,
+    rien ne force Claude à ne renvoyer QUE du JSON, contrairement à
+    Ollama/Gemini qui ont un vrai mode JSON), et réutilisé depuis v0.6.0
+    par l'import manuel (BackEnd/app/main.py::importer_manuel_ia) : un
+    élève qui colle la réponse de sa propre IA (ChatGPT, Gemini web...)
+    aura typiquement les mêmes défauts qu'un modèle mal cadré.
+    """
+    texte = texte.strip()
+    try:
+        return json.loads(texte)
+    except json.JSONDecodeError:
+        pass
+    # Retente en extrayant le premier bloc {...} au cas où il y aurait une
+    # phrase ou des balises markdown avant/après malgré la consigne.
+    debut, fin = texte.find("{"), texte.rfind("}")
+    if debut != -1 and fin != -1:
+        try:
+            return json.loads(texte[debut:fin + 1])
+        except json.JSONDecodeError:
+            pass
+    raise GenerationError("Réponse inexploitable (pas un JSON valide).")
+
+
 def _appeler_claude(prompt: str, api_key: str) -> dict:
     import anthropic
 
@@ -330,17 +406,8 @@ def _appeler_claude(prompt: str, api_key: str) -> dict:
 
     texte = "".join(b.text for b in response.content if b.type == "text").strip()
     try:
-        return json.loads(texte)
-    except json.JSONDecodeError:
-        # Contrairement à Ollama/Gemini, rien ne force Claude à ne renvoyer
-        # QUE du JSON : on retente en extrayant le premier bloc {...} au cas
-        # où il aurait ajouté une phrase avant/après malgré la consigne.
-        debut, fin = texte.find("{"), texte.rfind("}")
-        if debut != -1 and fin != -1:
-            try:
-                return json.loads(texte[debut:fin + 1])
-            except json.JSONDecodeError:
-                pass
+        return parser_json_ia(texte)
+    except GenerationError:
         raise GenerationError("Réponse Claude inexploitable (pas un JSON valide).")
 
 
@@ -452,7 +519,7 @@ def repondre_conversation(messages: list[dict], system_prompt: str, cfg: dict) -
     return _chat_ollama(messages, system_prompt, cfg["ollama_url"], cfg["ollama_model"])
 
 
-def _texte_source(conn, cours: dict) -> str:
+def texte_source(conn, cours: dict) -> str:
     """
     Texte complet (description + documents transcrits), SANS troncature :
     un cours long doit pouvoir être découpé en plusieurs passes (voir
@@ -576,7 +643,7 @@ def _transcrire_documents_manquants(cours_id: int) -> None:
 
     En théorie `pronote_sync` déclenche déjà la transcription dès le
     téléchargement — mais pour un document synchronisé avant l'ajout de ce
-    mécanisme, ou dont la transcription automatique a échoué, `_texte_source`
+    mécanisme, ou dont la transcription automatique a échoué, `texte_source`
     ne renvoyait jusque-là que la description Pronote (souvent un simple
     horaire/titre de chapitre, ex. "45'. Chapitre 1"), d'où des générations
     hors sujet malgré un document bien attaché.
@@ -607,7 +674,7 @@ def generer_pour_cours(cours_id: int, eleve_id: int | None = None) -> None:
         if row is None:
             raise GenerationError(f"Cours {cours_id} introuvable")
         cours = dict(row)
-        texte = _texte_source(conn, cours)
+        texte = texte_source(conn, cours)
         cfg = _avec_cle_gemini_perso(conn, config_ia(conn), eleve_id)
         # Passage par 'en_cours' même pour un échec immédiat (contenu vide) :
         # sans ça, le frontend (qui ne poll que si ia_statut === 'en_cours')
@@ -682,6 +749,37 @@ def generer_pour_cours(cours_id: int, eleve_id: int | None = None) -> None:
         )
 
 
+def importer_manuel(conn, cours_id: int, contenu: dict) -> None:
+    """
+    Applique un contenu déjà validé (voir `valider_forme_generation`) sur
+    un cours — même écriture que la fin de `generer_pour_cours` ci-dessus,
+    mais synchrone (pas d'appel modèle : `contenu` a déjà été produit
+    ailleurs, par l'IA personnelle d'un élève) et sans toucher
+    `ia_texte_source` (aucun texte n'a été envoyé à un modèle depuis ce
+    serveur — `completer_pour_cours` retombera sur `texte_source` si
+    besoin, comme pour toute génération antérieure à l'ajout de ce champ).
+    `ia_origine = 'import'` distingue ce contenu d'une génération par le
+    pipeline IA de Ghost School (purement informatif, voir Services/db.py).
+
+    Appelé avec une connexion déjà ouverte (voir BackEnd/app/main.py,
+    validation d'une demande d'import) pour que le passage de la demande
+    à 'validee' et l'écriture sur `cours` restent une seule transaction.
+    """
+    conn.execute(
+        """UPDATE cours
+           SET ia_statut = 'pret', ia_origine = 'import',
+               ia_resume = ?, ia_resume_detaille = ?, ia_flashcards = ?, ia_quiz = ?, ia_erreur = NULL
+           WHERE id = ?""",
+        (
+            contenu["resume_court"],
+            contenu["resume_detaille"],
+            json.dumps(contenu["flashcards"], ensure_ascii=False),
+            json.dumps(contenu["quiz"], ensure_ascii=False),
+            cours_id,
+        ),
+    )
+
+
 def completer_pour_cours(cours_id: int, n: int = N_COMPLEMENT, eleve_id: int | None = None) -> None:
     """
     Ajoute `n` flashcards et `n` questions de quiz supplémentaires à une
@@ -726,7 +824,7 @@ def completer_pour_cours(cours_id: int, n: int = N_COMPLEMENT, eleve_id: int | N
                 # Génération initiale antérieure à l'ajout de ce champ : pas
                 # de texte mémorisé, on retombe sur l'ancien comportement.
                 with db.session() as conn:
-                    texte_brut = _texte_source(conn, cours)
+                    texte_brut = texte_source(conn, cours)
                 if len(texte_brut.strip()) < TEXTE_SOURCE_MIN_CHARS:
                     raise GenerationError(
                         f"Texte source trop court ({len(texte_brut.strip())} caractère(s)) pour compléter "

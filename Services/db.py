@@ -157,6 +157,18 @@ def init_db() -> None:
         # ingère désormais tout, sans exception) et _migrer_matieres_
         # exclues_defaut ci-dessous pour la reprise de l'ancien réglage.
         _ensure_column(conn, "matieres", "exclue", "INTEGER NOT NULL DEFAULT 0")
+        # Génération manuelle (v0.6.0) : un élève copie le prompt, le colle
+        # dans sa propre IA hors Ghost School, puis importe le JSON obtenu —
+        # voir BackEnd/app/main.py::importer_manuel_ia. Désactivé par défaut
+        # comme l'assistant ci-dessus, même principe (_ensure_column eleves
+        # assistant_actif) : l'admin l'active au cas par cas (écran Élèves).
+        _ensure_column(conn, "eleves", "generation_manuelle_actif", "INTEGER NOT NULL DEFAULT 0")
+        # 'app' (généré par le pipeline IA de Ghost School) | 'import' (collé
+        # par un élève depuis sa propre IA, voir ci-dessus) — purement
+        # informatif (badge admin), ne change aucune règle de filtrage ni
+        # d'accès : contrairement à `ia_statut`, qui reste un état
+        # 'absent'/'en_cours'/'pret'/'echec' inchangé par ce chantier.
+        _ensure_column(conn, "cours", "ia_origine", "TEXT NOT NULL DEFAULT 'app'")
         _fusionner_eleves_dupliques(conn)
         _migrer_cles_notes_pronote(conn)
         _migrer_classe_defaut(conn)
@@ -398,6 +410,28 @@ def creer_demande_regeneration(conn: sqlite3.Connection, cours_id: int) -> int:
         """INSERT INTO traitements (type, cible_type, cible_id, statut, created_at)
            VALUES ('regeneration_demande', 'cours', ?, 'en_attente', ?)""",
         (cours_id, now_iso()),
+    )
+    return cur.lastrowid
+
+
+def creer_demande_import(conn: sqlite3.Connection, cours_id: int, contenu_valide: str) -> int:
+    """
+    Demande d'import manuel en attente de validation admin (v0.6.0, voir
+    BackEnd/app/main.py::importer_manuel_ia) — même principe que
+    `creer_demande_regeneration` ci-dessus (ligne d'attente dans la même
+    table, jamais via `log_traitement`), mais avec `resultat` déjà rempli :
+    contrairement à une régénération (rien à montrer, la génération n'a
+    pas encore eu lieu), le contenu à appliquer est déjà connu et validé
+    (voir Services/ia_generation.py::valider_forme_generation) au moment
+    de la demande — l'admin le relit avant de décider (`resultat` est déjà
+    affiché tel quel par l'écran Traitements via ResultatFormatte).
+    `contenu_valide` : JSON déjà sérialisé (`json.dumps(..., ensure_ascii=False)`),
+    pas un dict — cette fonction ne fait qu'écrire en base.
+    """
+    cur = conn.execute(
+        """INSERT INTO traitements (type, cible_type, cible_id, statut, resultat, created_at)
+           VALUES ('import_demande', 'cours', ?, 'en_attente', ?, ?)""",
+        (cours_id, contenu_valide, now_iso()),
     )
     return cur.lastrowid
 

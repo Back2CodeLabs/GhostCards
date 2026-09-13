@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Users, Sparkles, RotateCcw, XCircle } from "lucide-react";
+import { Users, Sparkles, Wand2, RotateCcw, XCircle } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 import { API_BASE, useApi, messageErreur } from "../api";
 import { Loading, ApiError, EmptyState, ClasseTabs } from "../components/Shared";
@@ -58,6 +58,20 @@ export function ElevesScreen() {
     }
   }
 
+  async function toggleGenerationManuelle(eleve) {
+    setTogglingId(eleve.id);
+    try {
+      await fetch(`${API_BASE}/api/eleves/${eleve.id}/generation-manuelle`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actif: !eleve.generation_manuelle_actif }),
+      });
+      eleves.reload();
+    } finally {
+      setTogglingId(null);
+    }
+  }
+
   async function forcerRepairage(eleve) {
     setReinitId(eleve.id);
     setReinitError(null);
@@ -80,8 +94,8 @@ export function ElevesScreen() {
       <div style={{ padding: "20px 20px 4px" }}>
         <h1 style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 24, color: C.ink, margin: 0 }}>Élèves</h1>
         <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: "4px 0 0" }}>
-          Comptes pairés avec leur propre Pronote (au moins une connexion). L'assistant IA est
-          désactivé par défaut pour chacun.
+          Comptes pairés avec leur propre Pronote (au moins une connexion). L'assistant IA et la
+          génération manuelle (v0.6.0) sont désactivés par défaut pour chacun.
         </p>
         {reinitError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "8px 0 0" }}>{reinitError}</p>}
       </div>
@@ -146,6 +160,21 @@ export function ElevesScreen() {
               }}
             >
               <Sparkles size={12} /> {e.assistant_actif ? "Assistant ON" : "Assistant OFF"}
+            </button>
+            <button
+              onClick={() => toggleGenerationManuelle(e)}
+              disabled={togglingId === e.id}
+              title={e.generation_manuelle_actif ? "Désactiver la génération manuelle pour cet élève" : "Activer la génération manuelle pour cet élève"}
+              style={{
+                display: "flex", alignItems: "center", gap: 5, flexShrink: 0,
+                background: e.generation_manuelle_actif ? C.hauntSoft : C.paperDim,
+                border: `1px solid ${e.generation_manuelle_actif ? C.haunt : C.line}`,
+                borderRadius: 999, padding: "5px 10px", fontFamily: uiFont, fontSize: 11, fontWeight: 700,
+                color: e.generation_manuelle_actif ? C.haunt : C.inkFaint,
+                cursor: togglingId === e.id ? "default" : "pointer", opacity: togglingId === e.id ? 0.6 : 1,
+              }}
+            >
+              <Wand2 size={12} /> {e.generation_manuelle_actif ? "Génération manuelle ON" : "Génération manuelle OFF"}
             </button>
             <button
               onClick={() => forcerRepairage(e)}

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { FileText, Download, LogIn, Paperclip, Sparkles, RefreshCw, Loader2, Ghost, GraduationCap, ShieldCheck, ChevronDown, ChevronUp, ExternalLink } from "lucide-react";
+import { FileText, Download, LogIn, Paperclip, Sparkles, RefreshCw, Loader2, Ghost, GraduationCap, ShieldCheck, ChevronDown, ChevronUp, ExternalLink, Wand2, Copy } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 import { API_BASE, useApi, messageErreur } from "../api";
 import { Loading, ApiError, ScreenHeader, AvertissementIA, IndicateursCours } from "../components/Shared";
@@ -74,6 +74,17 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin, onOpenTraitem
   const [verifyError, setVerifyError] = useState(null);
   const [completing, setCompleting] = useState(false);
   const [completingError, setCompletingError] = useState(null);
+  // Génération manuelle (v0.6.0) : prompt à copier + JSON à coller, voir
+  // ouvrirGenerationManuelle/importerManuel plus bas.
+  const [manuelOuvert, setManuelOuvert] = useState(false);
+  const [promptManuel, setPromptManuel] = useState(null);
+  const [promptLoading, setPromptLoading] = useState(false);
+  const [promptError, setPromptError] = useState(null);
+  const [promptCopie, setPromptCopie] = useState(false);
+  const [contenuColle, setContenuColle] = useState("");
+  const [importSubmitting, setImportSubmitting] = useState(false);
+  const [importError, setImportError] = useState(null);
+  const [importSucces, setImportSucces] = useState(false);
   const [resumeDetaille, setResumeDetaille] = useState(false);
   // Id du document/de la note dont l'aperçu est déplié dans la page (un
   // seul à la fois par liste) — null si aucun n'est ouvert.
@@ -180,6 +191,67 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin, onOpenTraitem
       setCompletingError(messageErreur(e, "Impossible de lancer le complément."));
     } finally {
       setCompleting(false);
+    }
+  }
+
+  async function chargerPromptManuel() {
+    if (promptManuel || promptLoading) return;
+    setPromptLoading(true);
+    setPromptError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/cours/${coursId}/prompt-manuel`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Erreur ${res.status}`);
+      }
+      const data = await res.json();
+      setPromptManuel(data.prompt);
+    } catch (e) {
+      setPromptError(messageErreur(e, "Impossible de charger le prompt."));
+    } finally {
+      setPromptLoading(false);
+    }
+  }
+
+  function ouvrirGenerationManuelle() {
+    setManuelOuvert((v) => !v);
+    if (!manuelOuvert) chargerPromptManuel();
+  }
+
+  async function copierPrompt() {
+    try {
+      await navigator.clipboard.writeText(promptManuel || "");
+      setPromptCopie(true);
+      setTimeout(() => setPromptCopie(false), 2000);
+    } catch {
+      // Presse-papier indisponible (permission refusée, contexte non
+      // sécurisé) : rien à faire de plus, le texte reste sélectionnable à
+      // la main dans le champ en lecture seule ci-dessous.
+    }
+  }
+
+  async function importerManuel() {
+    if (importSubmitting || !contenuColle.trim()) return;
+    setImportSubmitting(true);
+    setImportError(null);
+    setImportSucces(false);
+    try {
+      const res = await fetch(`${API_BASE}/api/cours/${coursId}/importer-manuel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contenu: contenuColle }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Erreur ${res.status}`);
+      }
+      setContenuColle("");
+      setImportSucces(true);
+      cours.reload();
+    } catch (e) {
+      setImportError(messageErreur(e, "Impossible d'importer ce contenu."));
+    } finally {
+      setImportSubmitting(false);
     }
   }
 
@@ -596,6 +668,77 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin, onOpenTraitem
               )}
               {generationError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "8px 0 0" }}>{generationError}</p>}
             </div>
+          </div>
+        )}
+
+        {sectionIAVisible && (me?.isAdmin || me?.eleve?.generation_manuelle_actif) && (
+          <div style={{ marginTop: 16 }}>
+            <button
+              onClick={ouvrirGenerationManuelle}
+              style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, width: "100%", background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "10px 14px", fontFamily: uiFont, fontSize: 12.5, fontWeight: 700, color: C.inkSoft, cursor: "pointer" }}
+            >
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <Wand2 size={14} /> Générer avec ma propre IA
+              </span>
+              {manuelOuvert ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            </button>
+
+            {manuelOuvert && (
+              <div style={{ marginTop: 10, background: C.paperDim, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14 }}>
+                <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkSoft, lineHeight: 1.5, margin: "0 0 10px" }}>
+                  Copie ce prompt, colle-le dans ton IA préférée (ChatGPT, Gemini, Claude…), puis colle sa réponse
+                  ci-dessous. Le contenu importé sera visible par toute la classe une fois validé par l'admin.
+                </p>
+
+                {promptLoading && <Loading />}
+                {promptError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "0 0 10px" }}>{promptError}</p>}
+                {promptManuel && (
+                  <>
+                    <textarea
+                      readOnly
+                      value={promptManuel}
+                      rows={6}
+                      style={{ width: "100%", resize: "vertical", background: C.white, border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px", fontFamily: uiFont, fontSize: 12.5, color: C.inkSoft, outline: "none" }}
+                    />
+                    <button
+                      onClick={copierPrompt}
+                      style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, background: "transparent", border: `1px solid ${C.line}`, borderRadius: 8, padding: "6px 12px", fontFamily: uiFont, fontSize: 12, fontWeight: 600, color: C.inkSoft, cursor: "pointer" }}
+                    >
+                      <Copy size={13} /> {promptCopie ? "Copié !" : "Copier le prompt"}
+                    </button>
+                  </>
+                )}
+
+                <p style={{ fontFamily: uiFont, fontSize: 11.5, fontWeight: 700, color: C.inkFaint, letterSpacing: 0.3, margin: "16px 0 6px" }}>
+                  COLLE LA RÉPONSE ICI (JSON)
+                </p>
+                <textarea
+                  value={contenuColle}
+                  onChange={(e) => setContenuColle(e.target.value)}
+                  placeholder='{"resume_court": "...", "resume_detaille": "...", "flashcards": [...], "quiz": [...]}'
+                  rows={6}
+                  style={{ width: "100%", resize: "vertical", background: C.white, border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 12px", fontFamily: uiFont, fontSize: 12.5, color: C.ink, outline: "none" }}
+                />
+                {importError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "8px 0 0" }}>{importError}</p>}
+                {importSucces && (
+                  <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.spectral, margin: "8px 0 0" }}>
+                    Envoyé pour validation — un admin doit encore l'approuver avant qu'il n'apparaisse pour la classe.
+                  </p>
+                )}
+                <button
+                  onClick={importerManuel}
+                  disabled={importSubmitting || !contenuColle.trim()}
+                  style={{ marginTop: 8, background: C.haunt, color: C.onAccent, border: "none", borderRadius: 8, padding: "8px 16px", fontFamily: uiFont, fontSize: 12.5, fontWeight: 700, cursor: contenuColle.trim() ? "pointer" : "default", opacity: importSubmitting ? 0.7 : 1 }}
+                >
+                  {importSubmitting ? "Envoi…" : "Importer"}
+                </button>
+                {c.import_manuel_en_attente && (
+                  <p style={{ fontFamily: uiFont, fontSize: 12, color: C.inkFaint, margin: "8px 0 0" }}>
+                    Un import est déjà en attente de validation pour ce cours.
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

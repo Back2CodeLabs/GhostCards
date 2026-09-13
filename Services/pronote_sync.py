@@ -245,7 +245,7 @@ def _transcrire_document_silencieux(document_id: int | None) -> None:
     sur SQLite si la transaction de sync était encore ouverte).
 
     Sans ça, le document reste avec `texte_extrait` NULL indéfiniment (rien
-    ne déclenchait jamais sa transcription) et `_texte_source` (voir
+    ne déclenchait jamais sa transcription) et `texte_source` (voir
     Services/ia_generation.py) ne trouve que la description Pronote —
     souvent un simple horaire/titre de chapitre — d'où des générations IA
     hors sujet malgré un document bien attaché. Une erreur ici (PDF

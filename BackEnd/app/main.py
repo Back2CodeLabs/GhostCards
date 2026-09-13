@@ -49,6 +49,8 @@ from Services.config import (  # noqa: E402
     CREDENTIALS_PATH,
     SYNC_DAYS_BACK,
     SYNC_DAYS_FORWARD,
+    FLASHCARDS_PAR_COURS,
+    QUESTIONS_QUIZ_PAR_COURS,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -114,7 +116,8 @@ def _current_eleve(request: Request):
         return None
     with db.session() as conn:
         row = conn.execute(
-            "SELECT id, nom, email, avatar_url, assistant_actif FROM eleves WHERE id = ?", (eleve_id,)
+            "SELECT id, nom, email, avatar_url, assistant_actif, generation_manuelle_actif FROM eleves WHERE id = ?",
+            (eleve_id,),
         ).fetchone()
         return dict(row) if row else None
 
@@ -151,6 +154,18 @@ def _peut_utiliser_assistant(request: Request) -> bool:
         return True
     eleve = _current_eleve(request)
     return bool(eleve and eleve.get("assistant_actif"))
+
+
+def _peut_generer_manuellement(request: Request) -> bool:
+    """
+    Génération manuelle (v0.6.0, voir importer_manuel_ia) : même principe
+    que `_peut_utiliser_assistant` — désactivée par défaut pour un compte
+    élève, activable au cas par cas depuis l'écran admin "Élèves".
+    """
+    if request.session.get("is_admin"):
+        return True
+    eleve = _current_eleve(request)
+    return bool(eleve and eleve.get("generation_manuelle_actif"))
 
 
 # Tailles (plus grand côté, en px) essayées successivement si le décodage
@@ -697,7 +712,7 @@ def cours_non_generes(request: Request, classe: str | None = None):
     """
     Cours sans résumé/flashcards/quiz (jamais générés, ou dernière tentative
     en échec) qui ont pourtant de quoi générer (description et/ou document
-    transcrit non vide — voir Services/ia_generation.py::_texte_source) :
+    transcrit non vide — voir Services/ia_generation.py::texte_source) :
     sert à l'écran admin "Traitements" pour déclencher la génération sans
     avoir à ouvrir chaque cours un par un. Les cours sans aucune source
     n'apparaissent pas ici : les lister sans rien à en tirer n'aiderait pas.
@@ -739,9 +754,7 @@ def get_cours(cours_id: int, request: Request):
         # collant un id (les listes, elles, le filtrent déjà) — `None` pour
         # l'admin (voir _classe_filtre) ou une ligne pas encore migrée
         # (`cours["classe"]` NULL) laisse passer sans vérifier.
-        classe_eleve = _classe_filtre(conn, request, None)
-        if classe_eleve and cours["classe"] and cours["classe"] != classe_eleve:
-            raise HTTPException(403, "Ce cours n'appartient pas à ta classe.")
+        _classe_verifiee_cours(conn, request, cours)
         documents = conn.execute(
             "SELECT id, nom_fichier, url_externe FROM documents WHERE cours_id = ?", (cours_id,)
         ).fetchall()
@@ -761,6 +774,10 @@ def get_cours(cours_id: int, request: Request):
             "SELECT 1 FROM traitements WHERE type = 'regeneration_demande' AND cible_id = ? AND statut = 'en_attente'",
             (cours_id,),
         ).fetchone()
+        import_en_attente = conn.execute(
+            "SELECT 1 FROM traitements WHERE type = 'import_demande' AND cible_id = ? AND statut = 'en_attente'",
+            (cours_id,),
+        ).fetchone()
         verif_traitement = conn.execute(
             "SELECT id FROM traitements WHERE cible_type = 'cours' AND cible_id = ? AND type = 'ia_verification' ORDER BY id DESC LIMIT 1",
             (cours_id,),
@@ -768,6 +785,7 @@ def get_cours(cours_id: int, request: Request):
         c = dict(cours)
         c["ia_traitement_id"] = ia_traitement["id"] if ia_traitement else None
         c["regeneration_en_attente"] = demande_en_attente is not None
+        c["import_manuel_en_attente"] = import_en_attente is not None
         c["ia_verification_traitement_id"] = verif_traitement["id"] if verif_traitement else None
         # ia_flashcards/ia_quiz sont stockés en JSON texte (voir Services/ia_generation.py) :
         # décodés ici pour que le frontend reçoive de vraies structures, pas des chaînes.
@@ -781,6 +799,89 @@ def get_cours(cours_id: int, request: Request):
             "documents": [dict(d) for d in documents],
             "notes": [dict(n) for n in notes],
         }
+
+
+def _classe_verifiee_cours(conn, request: Request, cours) -> None:
+    """
+    Factorise la garde déjà utilisée par get_cours ci-dessus (403 si le
+    cours n'appartient pas à la classe de l'élève) — réutilisée par les
+    deux endpoints de génération manuelle ci-dessous, qui portent sur un
+    cours précis comme get_cours.
+    """
+    classe_eleve = _classe_filtre(conn, request, None)
+    if classe_eleve and cours["classe"] and cours["classe"] != classe_eleve:
+        raise HTTPException(403, "Ce cours n'appartient pas à ta classe.")
+
+
+@app.get("/api/cours/{cours_id}/prompt-manuel")
+def prompt_generation_manuelle(cours_id: int, request: Request):
+    """
+    Prompt prêt à copier (v0.6.0) pour qu'un élève génère lui-même le
+    résumé/flashcards/quiz avec sa propre IA (ChatGPT, Gemini, Claude...),
+    hors Ghost School, puis les importe (voir importer_manuel_ia
+    ci-dessous) — utile quand Ollama est trop lent (jusqu'à ~30 min sur un
+    cours complet, voir Services/ia_generation.py) ou indisponible.
+
+    Même texte source et même consigne qu'une génération automatique
+    (`ia_generation.construire_prompt_generation`), mais SANS le
+    découpage propre à Ollama (`_texte_pour_prompt`) : un outil externe a
+    un contexte largement suffisant pour un cours entier, comme c'est déjà
+    le cas pour Claude/Gemini dans le pipeline existant.
+    """
+    _require_session(request)
+    if not _peut_generer_manuellement(request):
+        raise HTTPException(403, "Génération manuelle désactivée pour ton compte — demande à l'admin de l'activer.")
+    with db.session() as conn:
+        cours = conn.execute("SELECT * FROM cours WHERE id = ?", (cours_id,)).fetchone()
+        if cours is None:
+            raise HTTPException(404, "Cours introuvable")
+        _classe_verifiee_cours(conn, request, cours)
+        texte = ia_generation.texte_source(conn, dict(cours))
+        if not texte.strip():
+            raise HTTPException(400, "Ce cours n'a ni description ni document transcrit à partir duquel générer.")
+        cfg = ia_generation.config_ia(conn)
+    prompt = ia_generation.construire_prompt_generation(
+        texte, FLASHCARDS_PAR_COURS, QUESTIONS_QUIZ_PAR_COURS, cfg["prompt_generation_consigne"],
+    )
+    return {"prompt": prompt}
+
+
+class ImporterManuelPayload(BaseModel):
+    contenu: str
+
+
+@app.post("/api/cours/{cours_id}/importer-manuel")
+def importer_manuel_ia(cours_id: int, payload: ImporterManuelPayload, request: Request):
+    """
+    Reçoit le JSON collé par l'élève (réponse de sa propre IA au prompt de
+    prompt_generation_manuelle ci-dessus), le parse/valide, puis crée
+    TOUJOURS une demande en attente de validation admin (jamais
+    d'application immédiate, contrairement à une première génération
+    automatique) — ce texte n'est jamais passé par le prompt contrôlé de
+    Ghost School, une validation systématique protège le contenu partagé
+    de la classe d'un import fantaisiste ou erroné.
+    """
+    _require_session(request)
+    if not _peut_generer_manuellement(request):
+        raise HTTPException(403, "Génération manuelle désactivée pour ton compte — demande à l'admin de l'activer.")
+    with db.session() as conn:
+        cours = conn.execute("SELECT id, classe FROM cours WHERE id = ?", (cours_id,)).fetchone()
+        if cours is None:
+            raise HTTPException(404, "Cours introuvable")
+        _classe_verifiee_cours(conn, request, cours)
+        existante = conn.execute(
+            "SELECT id FROM traitements WHERE type = 'import_demande' AND cible_id = ? AND statut = 'en_attente'",
+            (cours_id,),
+        ).fetchone()
+        if existante:
+            return {"status": "deja_en_attente", "demande_id": existante["id"]}
+        try:
+            resultat = ia_generation.parser_json_ia(payload.contenu)
+            resultat = ia_generation.valider_forme_generation(resultat)
+        except ia_generation.GenerationError as e:
+            raise HTTPException(400, str(e))
+        demande_id = db.creer_demande_import(conn, cours_id, json.dumps(resultat, ensure_ascii=False))
+    return {"status": "demande_en_attente", "demande_id": demande_id}
 
 
 @app.post("/api/cours/{cours_id}/generer")
@@ -829,17 +930,31 @@ def generer_contenu_ia(cours_id: int, request: Request, background_tasks: Backgr
 
 @app.post("/api/traitements/demandes/{demande_id}/valider")
 def valider_demande_regeneration(demande_id: int, request: Request, background_tasks: BackgroundTasks):
-    """Valide une demande de régénération en attente : lance enfin la génération, comme un /generer normal."""
+    """
+    Valide une demande en attente — de deux types possibles (même table
+    `traitements`, voir `db.creer_demande_regeneration`/`creer_demande_
+    import`) :
+    - 'regeneration_demande' : lance enfin la génération, comme un
+      /generer normal (rien n'a encore été calculé, juste demandé).
+    - 'import_demande' (v0.6.0) : le contenu a déjà été collé, parsé et
+      validé par l'élève au moment de la demande (voir importer_manuel_ia)
+      — pas d'appel modèle ici, juste l'écriture du contenu déjà en
+      attente (`ia_generation.importer_manuel`), synchrone.
+    """
     _require_admin(request)
     with db.session() as conn:
         row = conn.execute(
-            "SELECT cible_id FROM traitements WHERE id = ? AND type = 'regeneration_demande' AND statut = 'en_attente'",
+            """SELECT cible_id, type, resultat FROM traitements
+               WHERE id = ? AND type IN ('regeneration_demande', 'import_demande') AND statut = 'en_attente'""",
             (demande_id,),
         ).fetchone()
         if row is None:
             raise HTTPException(404, "Demande introuvable ou déjà traitée.")
         cours_id = row["cible_id"]
         conn.execute("UPDATE traitements SET statut = 'validee', finished_at = ? WHERE id = ?", (db.now_iso(), demande_id))
+        if row["type"] == "import_demande":
+            ia_generation.importer_manuel(conn, cours_id, json.loads(row["resultat"]))
+            return {"status": "validee"}
         conn.execute("UPDATE cours SET ia_statut = 'en_cours' WHERE id = ?", (cours_id,))
     background_tasks.add_task(ia_generation.generer_pour_cours, cours_id)
     return {"status": "validee"}
@@ -847,10 +962,12 @@ def valider_demande_regeneration(demande_id: int, request: Request, background_t
 
 @app.post("/api/traitements/demandes/{demande_id}/rejeter")
 def rejeter_demande_regeneration(demande_id: int, request: Request):
+    """Rejette une demande en attente (régénération ou import manuel, voir valider_demande_regeneration)."""
     _require_admin(request)
     with db.session() as conn:
         row = conn.execute(
-            "SELECT 1 FROM traitements WHERE id = ? AND type = 'regeneration_demande' AND statut = 'en_attente'",
+            """SELECT 1 FROM traitements
+               WHERE id = ? AND type IN ('regeneration_demande', 'import_demande') AND statut = 'en_attente'""",
             (demande_id,),
         ).fetchone()
         if row is None:
@@ -1089,9 +1206,9 @@ def list_eleves(request: Request):
     with db.session() as conn:
         rows = conn.execute(
             """SELECT e.id, e.nom, e.email, e.avatar_url, e.created_at, e.derniere_connexion,
-                      e.assistant_actif, e.pronote_class_name, e.pronote_groupes, e.pronote_sync_statut,
-                      e.pronote_sync_erreur, e.pronote_derniere_synchro, e.consentement_pronote_le,
-                      COUNT(n.id) AS nb_notes
+                      e.assistant_actif, e.generation_manuelle_actif, e.pronote_class_name, e.pronote_groupes,
+                      e.pronote_sync_statut, e.pronote_sync_erreur, e.pronote_derniere_synchro,
+                      e.consentement_pronote_le, COUNT(n.id) AS nb_notes
                FROM eleves e LEFT JOIN notes_eleves n ON n.eleve_id = e.id
                GROUP BY e.id ORDER BY e.derniere_connexion DESC"""
         ).fetchall()
@@ -1110,6 +1227,21 @@ def set_assistant_actif(eleve_id: int, payload: AssistantActifPayload, request: 
         if conn.execute("SELECT 1 FROM eleves WHERE id = ?", (eleve_id,)).fetchone() is None:
             raise HTTPException(404, "Élève introuvable")
         conn.execute("UPDATE eleves SET assistant_actif = ? WHERE id = ?", (int(payload.actif), eleve_id))
+    return {"ok": True}
+
+
+class GenerationManuelleActifPayload(BaseModel):
+    actif: bool
+
+
+@app.put("/api/eleves/{eleve_id}/generation-manuelle")
+def set_generation_manuelle_actif(eleve_id: int, payload: GenerationManuelleActifPayload, request: Request):
+    """Active/désactive la génération manuelle pour un élève précis — voir _peut_generer_manuellement."""
+    _require_admin(request)
+    with db.session() as conn:
+        if conn.execute("SELECT 1 FROM eleves WHERE id = ?", (eleve_id,)).fetchone() is None:
+            raise HTTPException(404, "Élève introuvable")
+        conn.execute("UPDATE eleves SET generation_manuelle_actif = ? WHERE id = ?", (int(payload.actif), eleve_id))
     return {"ok": True}
 
 
