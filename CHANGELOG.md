@@ -5,7 +5,18 @@ Numéro de version affiché dans l'app (voir `FrontEnd/package.json`, injecté
 via `vite.config.js`) — à incrémenter à chaque publication sur l'OptiPlex,
 avec une nouvelle entrée ici.
 
-## [0.3.7] — en cours
+## [0.3.8] — en cours
+
+### Changed
+- Accueil : la liste des matières (doublon de l'onglet Matières) est
+  remplacée par l'emploi du temps du jour, cours annulés compris.
+
+### Added
+- Le groupe Pronote (LV2, options...) d'un élève, quand il est détecté
+  dans son propre emploi du temps, apparaît désormais sur sa fiche
+  (écran admin Élèves) à côté de sa classe.
+
+## [0.3.7] — 2026-09-13
 
 ### Added
 - Recadrage de la photo du QR code avant envoi (zone ajustable + zoom) sur
