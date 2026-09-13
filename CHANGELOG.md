@@ -5,7 +5,19 @@ Numéro de version affiché dans l'app (voir `FrontEnd/package.json`, injecté
 via `vite.config.js`) — à incrémenter à chaque publication sur l'OptiPlex,
 avec une nouvelle entrée ici.
 
-## [0.3.8] — en cours
+## [0.3.9] — en cours
+
+### Added
+- Bandeau "Quiz du jour" tout en haut de l'accueil : met en avant un cours
+  déjà prêt à réviser, ou à défaut un cours qu'on peut générer, pour que
+  la génération IA (résumé/flashcards/quiz) ne passe plus inaperçue.
+
+### Fixed
+- Un cours avec seulement une description (pas de document ni de note)
+  n'affichait jamais le bouton "Générer", alors que le serveur sait déjà
+  générer à partir de la seule description.
+
+## [0.3.8] — 2026-09-13
 
 ### Changed
 - Accueil : la liste des matières (doublon de l'onglet Matières) est
