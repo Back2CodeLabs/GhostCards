@@ -5,7 +5,15 @@ Numéro de version affiché dans l'app (voir `FrontEnd/package.json`, injecté
 via `vite.config.js`) — à incrémenter à chaque publication sur l'OptiPlex,
 avec une nouvelle entrée ici.
 
-## [0.3.6] — en cours
+## [0.3.7] — en cours
+
+### Added
+- Recadrage de la photo du QR code avant envoi (zone ajustable + zoom) sur
+  l'écran de connexion, au lieu d'uploader l'écran entier tel quel — moins
+  de parasites autour du QR pour la détection côté serveur, moins de
+  données envoyées.
+
+## [0.3.6] — 2026-09-13
 
 ### Fixed
 - Pairage Pronote : après une connexion réussie, l'écran de pairage restait
