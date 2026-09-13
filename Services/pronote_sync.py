@@ -276,12 +276,12 @@ def _transcrire_document_silencieux(document_id: int | None) -> None:
 STAGGER_ELEVES_S = 5
 
 
-def _synchroniser_compte(client, cfg, date_from, date_to, fetch_content, counters, documents_a_transcrire, *, eleve_id=None, groupes_vus=None):
-    """Cours/devoirs (partagés) + notes (scopées par eleve_id) pour un client déjà connecté."""
+def _synchroniser_compte(client, cfg, date_from, date_to, fetch_content, counters, documents_a_transcrire, *, classe, eleve_id=None, groupes_vus=None):
+    """Cours/devoirs (partagés par classe) + notes (scopées par eleve_id) pour un client déjà connecté."""
     with db.session() as conn:
-        _sync_lessons(conn, client, date_from, date_to, fetch_content, counters, documents_a_transcrire, cfg["matieres_exclues_slugs"], groupes_vus=groupes_vus)
+        _sync_lessons(conn, client, date_from, date_to, fetch_content, counters, documents_a_transcrire, cfg["matieres_exclues_slugs"], classe, groupes_vus=groupes_vus)
     with db.session() as conn:
-        _sync_homework(conn, client, date_from, date_to, counters, documents_a_transcrire, cfg["matieres_exclues_slugs"])
+        _sync_homework(conn, client, date_from, date_to, counters, documents_a_transcrire, cfg["matieres_exclues_slugs"], classe)
     with db.session() as conn:
         _sync_grades(conn, client, counters, cfg["matieres_exclues_slugs"], eleve_id=eleve_id)
 
@@ -303,9 +303,13 @@ def _synchroniser_eleve(eleve_row, cfg, date_from, date_to, fetch_content, count
         with db.session() as conn:
             conn.execute("UPDATE eleves SET pronote_credentials = ? WHERE id = ?", (nouvelles_credentials, eleve_id))
 
+        # Classe de CE compte, lue une fois connecté (voir module docstring
+        # multi-classe) : chaque élève apporte la classe de son propre
+        # compte, pas besoin d'un second compte de référence pour 2E.
+        classe = client.info.class_name
         _synchroniser_compte(
             client, cfg, date_from, date_to, fetch_content, counters, documents_a_transcrire,
-            eleve_id=eleve_id, groupes_vus=groupes_vus,
+            classe=classe, eleve_id=eleve_id, groupes_vus=groupes_vus,
         )
 
         with db.session() as conn:
@@ -380,6 +384,7 @@ def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
 
             t0 = time.monotonic()
             client = get_client(cfg["pronote_url"])
+            classe_reference = client.info.class_name
             ctx.etape("connexion (référence)", detail="Connexion à Pronote (jeton pivoté)", duree_ms=int((time.monotonic() - t0) * 1000))
 
             date_from = date.today() - timedelta(days=cfg["sync_days_back"])
@@ -388,7 +393,7 @@ def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
 
             t1 = time.monotonic()
             with db.session() as conn:
-                _sync_lessons(conn, client, date_from, date_to, fetch_content, counters, documents_a_transcrire, cfg["matieres_exclues_slugs"])
+                _sync_lessons(conn, client, date_from, date_to, fetch_content, counters, documents_a_transcrire, cfg["matieres_exclues_slugs"], classe_reference)
             ctx.etape(
                 "cours",
                 detail=f"{counters['nouveaux_cours']} nouveau(x) cours, {counters['nouveaux_documents']} document(s) téléchargé(s)",
@@ -397,7 +402,7 @@ def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
 
             t2 = time.monotonic()
             with db.session() as conn:
-                _sync_homework(conn, client, date_from, date_to, counters, documents_a_transcrire, cfg["matieres_exclues_slugs"])
+                _sync_homework(conn, client, date_from, date_to, counters, documents_a_transcrire, cfg["matieres_exclues_slugs"], classe_reference)
             ctx.etape("devoirs", detail=f"{counters['nouveaux_devoirs']} nouveau(x) devoir(s)", duree_ms=int((time.monotonic() - t2) * 1000))
 
             t4 = time.monotonic()
@@ -455,7 +460,7 @@ def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
     return counters
 
 
-def _sync_lessons(conn, client, date_from, date_to, fetch_content, counters, documents_a_transcrire, matieres_exclues_slugs, groupes_vus=None):
+def _sync_lessons(conn, client, date_from, date_to, fetch_content, counters, documents_a_transcrire, matieres_exclues_slugs, classe, groupes_vus=None):
     try:
         lessons = client.lessons(date_from, date_to)
     except requests.exceptions.RequestException as e:
@@ -474,7 +479,15 @@ def _sync_lessons(conn, client, date_from, date_to, fetch_content, counters, doc
 
         matiere_id = db.upsert_matiere(conn, subject.name)
         teacher = getattr(lesson, "teacher_name", "") or ""
-        key = _stable_key(lesson.start.isoformat(), subject.name, teacher)
+        # Classe incluse dans la clé (et pas juste l'horodatage complet
+        # `lesson.start.isoformat()` comme avant) : reconstructible depuis
+        # les seules colonnes stockées (date, heure_debut) — nécessaire
+        # pour que la migration (Services/db.py::_migrer_classe_defaut)
+        # puisse recalculer les clés existantes sans réimporter en double.
+        # Sans la classe, deux classes différentes avec le même prof/
+        # matière/créneau (courant dans un emploi du temps réel) auraient
+        # produit la même clé et fusionné leurs cours à tort.
+        key = _stable_key(classe, lesson.start.date().isoformat(), lesson.start.strftime("%H:%M"), subject.name, teacher)
 
         # Emploi du temps enrichi : ces champs peuvent changer d'une synchro
         # à l'autre (annulation décidée après coup, salle réattribuée) même
@@ -499,14 +512,14 @@ def _sync_lessons(conn, client, date_from, date_to, fetch_content, counters, doc
                 """INSERT INTO cours
                    (external_key, matiere_id, date, heure_debut, heure_fin, professeur,
                     titre, description, annule, statut, salle, groupe, memo, devoir_surveille,
-                    contenu_recupere, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)""",
+                    contenu_recupere, classe, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)""",
                 (
                     key, matiere_id,
                     lesson.start.date().isoformat(), lesson.start.strftime("%H:%M"),
                     lesson.end.strftime("%H:%M") if getattr(lesson, "end", None) else None,
                     teacher, None, None, annule, statut, salle, groupe, memo, devoir_surveille,
-                    _now(), _now(),
+                    classe, _now(), _now(),
                 ),
             )
             cours_id = cur.lastrowid
@@ -559,7 +572,7 @@ def _fetch_lesson_content(conn, client, lesson, cours_id, subject_name, counters
         documents_a_transcrire.append(document_id)
 
 
-def _sync_homework(conn, client, date_from, date_to, counters, documents_a_transcrire, matieres_exclues_slugs):
+def _sync_homework(conn, client, date_from, date_to, counters, documents_a_transcrire, matieres_exclues_slugs, classe):
     try:
         homeworks = client.homework(date_from, date_to)
     except requests.exceptions.RequestException as e:
@@ -575,16 +588,18 @@ def _sync_homework(conn, client, date_from, date_to, counters, documents_a_trans
 
         matiere_id = db.upsert_matiere(conn, subject.name)
         description = hw.description or ""
-        key = _stable_key(hw.date.isoformat(), subject.name, description[:60])
+        # Classe incluse dans la clé — voir le commentaire équivalent dans
+        # _sync_lessons (même risque de collision entre deux classes).
+        key = _stable_key(classe, hw.date.isoformat(), subject.name, description[:60])
 
         row = conn.execute("SELECT id FROM devoirs WHERE external_key = ?", (key,)).fetchone()
         if row is not None:
             continue  # déjà connu : on ne retélécharge pas ses pièces jointes
 
         cur = conn.execute(
-            """INSERT INTO devoirs (external_key, matiere_id, date_rendu, description, fait, created_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (key, matiere_id, hw.date.isoformat(), description, int(bool(hw.done)), _now()),
+            """INSERT INTO devoirs (external_key, matiere_id, date_rendu, description, fait, classe, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (key, matiere_id, hw.date.isoformat(), description, int(bool(hw.done)), classe, _now()),
         )
         devoir_id = cur.lastrowid
         counters["nouveaux_devoirs"] += 1

@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from contextlib import contextmanager
 
-from .config import DB_PATH
+from .config import DB_PATH, CLASSE_ATTENDUE
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -136,8 +136,25 @@ def init_db() -> None:
         # renvoyée à un élève, seulement à l'admin (voir config_pronote /
         # l'API GET /api/matieres/{id}/notes, scopée par eleve_id).
         _ensure_column(conn, "notes_pronote", "eleve_id", "INTEGER REFERENCES eleves(id)")
+        # Multi-classe (2F, 2E...) : les classes autorisées au pairage
+        # deviennent une vraie liste gérable (écran admin Paramétrage),
+        # remplace l'ancien paramètre `classe_attendue` (chaîne unique).
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS classes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nom TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL
+            )"""
+        )
+        # `classe` sur cours/devoirs : contenu partagé mais propre à une
+        # classe (voir Services/pronote_sync.py — dérivée de
+        # `client.info.class_name` à la synchro). `matieres` reste global
+        # (vocabulaire de matières commun aux classes).
+        _ensure_column(conn, "cours", "classe", "TEXT")
+        _ensure_column(conn, "devoirs", "classe", "TEXT")
         _fusionner_eleves_dupliques(conn)
         _migrer_cles_notes_pronote(conn)
+        _migrer_classe_defaut(conn)
         conn.commit()
 
 
@@ -161,6 +178,94 @@ def _migrer_cles_notes_pronote(conn: sqlite3.Connection) -> None:
         ])
         nouvelle_cle = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:20]
         conn.execute("UPDATE notes_pronote SET external_key = ? WHERE id = ?", (nouvelle_cle, r["id"]))
+
+
+def _migrer_classe_defaut(conn: sqlite3.Connection) -> None:
+    """
+    Introduction de la classe (2F, 2E...) sur `cours`/`devoirs` (voir
+    Services/pronote_sync.py) : si `classes` est encore vide et que
+    l'ancien réglage `classe_attendue` (avant la vraie liste gérable
+    d'aujourd'hui, écran Paramétrage) avait une valeur, l'utilise pour
+    créer la première ligne dans `classes`. Puis renseigne `classe` sur
+    les lignes `cours`/`devoirs` déjà en base qui ne l'ont pas encore
+    (avec la première classe connue) et recalcule leur `external_key`
+    avec la nouvelle formule (qui inclut désormais la classe), sinon
+    elles seraient réimportées en double au prochain sync. Idempotent :
+    sans effet une fois toutes les lignes migrées.
+    """
+    if conn.execute("SELECT 1 FROM classes LIMIT 1").fetchone() is None:
+        # Retombe sur la variable d'env CLASSE_ATTENDUE si l'admin n'a
+        # jamais explicitement enregistré le réglage depuis Paramétrage —
+        # même ordre de repli que l'ancien `get_parametre(conn,
+        # "classe_attendue", CLASSE_ATTENDUE)` remplacé par cette migration.
+        ancienne = get_parametre(conn, "classe_attendue", CLASSE_ATTENDUE)
+        if ancienne and ancienne.strip():
+            conn.execute(
+                "INSERT OR IGNORE INTO classes (nom, created_at) VALUES (?, ?)",
+                (ancienne.strip(), now_iso()),
+            )
+
+    ligne = conn.execute("SELECT nom FROM classes ORDER BY id LIMIT 1").fetchone()
+    if ligne is None:
+        # Aucune classe connue nulle part (déploiement neuf, jamais
+        # configuré) : rien à assigner aux lignes existantes, elles
+        # resteront à classe NULL jusqu'au prochain sync réel.
+        return
+    classe_defaut = ligne["nom"]
+
+    for c in conn.execute(
+        """SELECT c.id, c.date, c.heure_debut, c.professeur, m.nom AS matiere
+           FROM cours c JOIN matieres m ON m.id = c.matiere_id
+           WHERE c.classe IS NULL"""
+    ).fetchall():
+        cle = hashlib.sha1(
+            "|".join([classe_defaut, c["date"], c["heure_debut"], c["matiere"], c["professeur"] or ""]).encode("utf-8")
+        ).hexdigest()[:20]
+        conn.execute("UPDATE cours SET classe = ?, external_key = ? WHERE id = ?", (classe_defaut, cle, c["id"]))
+
+    for d in conn.execute(
+        """SELECT d.id, d.date_rendu, d.description, m.nom AS matiere
+           FROM devoirs d JOIN matieres m ON m.id = d.matiere_id
+           WHERE d.classe IS NULL"""
+    ).fetchall():
+        cle = hashlib.sha1(
+            "|".join([classe_defaut, d["date_rendu"], d["matiere"], (d["description"] or "")[:60]]).encode("utf-8")
+        ).hexdigest()[:20]
+        conn.execute("UPDATE devoirs SET classe = ?, external_key = ? WHERE id = ?", (classe_defaut, cle, d["id"]))
+
+
+class DerniereClasseError(Exception):
+    pass
+
+
+def lister_classes(conn: sqlite3.Connection) -> list[dict]:
+    return [dict(r) for r in conn.execute("SELECT id, nom FROM classes ORDER BY nom").fetchall()]
+
+
+def ajouter_classe(conn: sqlite3.Connection, nom: str) -> int:
+    nom = nom.strip()
+    conn.execute(
+        "INSERT INTO classes (nom, created_at) VALUES (?, ?) ON CONFLICT(nom) DO NOTHING", (nom, now_iso())
+    )
+    return conn.execute("SELECT id FROM classes WHERE nom = ?", (nom,)).fetchone()["id"]
+
+
+def supprimer_classe(conn: sqlite3.Connection, classe_id: int) -> None:
+    """
+    Refuse de supprimer la dernière classe restante : une table `classes`
+    vide rouvre le pairage à n'importe quelle classe (comportement de
+    compatibilité documenté, voir `classes_autorisees`/`pairer_eleve_
+    pronote`) — jamais voulu par accident.
+    """
+    total = conn.execute("SELECT COUNT(*) AS n FROM classes").fetchone()["n"]
+    if total <= 1:
+        raise DerniereClasseError("Impossible de supprimer la dernière classe restante.")
+    conn.execute("DELETE FROM classes WHERE id = ?", (classe_id,))
+
+
+def classes_autorisees(conn: sqlite3.Connection) -> set[str]:
+    """Ensemble normalisé (minuscules) des classes acceptées au pairage — voir pairer_eleve_pronote."""
+    return {r["nom"].strip().lower() for r in conn.execute("SELECT nom FROM classes").fetchall()}
 
 
 def upsert_eleve_pronote(
@@ -211,18 +316,23 @@ def _fusionner_eleves_dupliques(conn: sqlite3.Connection) -> None:
     Corrige les doublons produits avant la correction ci-dessus
     d'`upsert_eleve_pronote` (constaté en prod le 2026-09-13, `pronote_id`
     non stable d'un pairage à l'autre pour un même élève réel). Regroupe
-    les lignes `eleves` pairées par nom normalisé ; pour chaque groupe de
-    plus d'une ligne, garde celle synchronisée le plus récemment, supprime
-    les `notes_pronote` des lignes éliminées (même élève réel ⇒ mêmes
-    notes, déjà couvertes par la ligne conservée une fois resynchronisée),
-    puis supprime ces lignes. Idempotent : sans effet si aucun doublon.
+    les lignes `eleves` pairées par (nom normalisé, classe) — pas le nom
+    seul : une fois plusieurs classes réelles en présence (2F, 2E...), un
+    homonyme entre deux classes différentes ne doit jamais être fusionné.
+    Pour chaque groupe de plus d'une ligne, garde celle synchronisée le
+    plus récemment, supprime les `notes_pronote` des lignes éliminées
+    (même élève réel ⇒ mêmes notes, déjà couvertes par la ligne conservée
+    une fois resynchronisée), puis supprime ces lignes. Idempotent : sans
+    effet si aucun doublon.
     """
     rows = conn.execute(
-        "SELECT id, nom, pronote_derniere_synchro, derniere_connexion FROM eleves WHERE pronote_id IS NOT NULL"
+        """SELECT id, nom, pronote_class_name, pronote_derniere_synchro, derniere_connexion
+           FROM eleves WHERE pronote_id IS NOT NULL"""
     ).fetchall()
-    groupes: dict[str, list[sqlite3.Row]] = {}
+    groupes: dict[tuple[str, str], list[sqlite3.Row]] = {}
     for r in rows:
-        groupes.setdefault(r["nom"].strip().lower(), []).append(r)
+        cle = (r["nom"].strip().lower(), (r["pronote_class_name"] or "").strip().lower())
+        groupes.setdefault(cle, []).append(r)
 
     for membres in groupes.values():
         if len(membres) < 2:
