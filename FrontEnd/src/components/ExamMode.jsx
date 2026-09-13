@@ -10,38 +10,68 @@ import { useTheme, uiFont } from "../theme";
 /* flashcards (auto-évaluées) puis quiz (auto-corrigé), puis score final. */
 /* ------------------------------------------------------------------ */
 
+// Délai entre le clic sur "Je savais"/"Je ne savais pas" et l'avancement
+// réel à la carte suivante : le temps de voir le check/croix (.gc-pop)
+// s'afficher, sans quoi la réponse disparaît trop vite pour être un vrai
+// retour visuel (voir `repondreFlashcard` plus bas, aucun feedback avant).
+const DELAI_FEEDBACK_MS = 550;
+
 function ExamFlashcard({ card, onAnswer }) {
   const { C } = useTheme();
   const [revealed, setRevealed] = useState(false);
+  const [feedback, setFeedback] = useState(null); // null | true (savais) | false (pas su)
+
+  function repondre(savais) {
+    if (feedback !== null) return; // évite un double clic pendant le délai
+    setFeedback(savais);
+    setTimeout(() => onAnswer(savais), DELAI_FEEDBACK_MS);
+  }
+
+  const faceStyle = { background: C.white, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18, minHeight: 140 };
+
   return (
-    <div style={{ background: C.white, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18, minHeight: 140 }}>
-      <div style={{ fontSize: 15, color: C.ink, fontWeight: 700, lineHeight: 1.4 }}>{card.question}</div>
-      {!revealed ? (
-        <button
-          onClick={() => setRevealed(true)}
-          style={{ marginTop: 14, background: C.paperDim, border: `1px solid ${C.line}`, borderRadius: 8, padding: "8px 14px", fontFamily: uiFont, fontSize: 12.5, color: C.inkSoft, cursor: "pointer" }}
-        >
-          Toucher pour voir la réponse
-        </button>
-      ) : (
-        <>
-          <div style={{ fontSize: 13.5, color: C.spectral, marginTop: 12, lineHeight: 1.5 }}>{card.reponse}</div>
+    <div className="gc-flip gc-card-in">
+      <div className={`gc-flip-inner${revealed ? " gc-flip-retournee" : ""}`}>
+        <div className="gc-flip-face" style={faceStyle}>
+          <div style={{ fontSize: 15, color: C.ink, fontWeight: 700, lineHeight: 1.4 }}>{card.question}</div>
+          <button
+            onClick={() => setRevealed(true)}
+            style={{ marginTop: 14, background: C.paperDim, border: `1px solid ${C.line}`, borderRadius: 8, padding: "8px 14px", fontFamily: uiFont, fontSize: 12.5, color: C.inkSoft, cursor: "pointer" }}
+          >
+            Toucher pour voir la réponse
+          </button>
+        </div>
+        <div className="gc-flip-face gc-flip-face-arriere" style={faceStyle}>
+          <div style={{ fontSize: 13.5, color: C.spectral, lineHeight: 1.5 }}>{card.reponse}</div>
           <div className="flex items-center gap-2" style={{ marginTop: 14 }}>
             <button
-              onClick={() => onAnswer(true)}
-              style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, justifyContent: "center", background: C.spectralSoft, color: C.spectral, border: "none", borderRadius: 8, padding: "9px 12px", fontFamily: uiFont, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}
+              onClick={() => repondre(true)}
+              disabled={feedback !== null}
+              style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, justifyContent: "center", background: C.spectralSoft, color: C.spectral, border: "none", borderRadius: 8, padding: "9px 12px", fontFamily: uiFont, fontSize: 12.5, fontWeight: 700, cursor: feedback === null ? "pointer" : "default" }}
             >
               <Check size={14} /> Je savais
             </button>
             <button
-              onClick={() => onAnswer(false)}
-              style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, justifyContent: "center", background: C.brickSoft, color: C.brick, border: "none", borderRadius: 8, padding: "9px 12px", fontFamily: uiFont, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}
+              onClick={() => repondre(false)}
+              disabled={feedback !== null}
+              style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, justifyContent: "center", background: C.brickSoft, color: C.brick, border: "none", borderRadius: 8, padding: "9px 12px", fontFamily: uiFont, fontSize: 12.5, fontWeight: 700, cursor: feedback === null ? "pointer" : "default" }}
             >
               <X size={14} /> Je ne savais pas
             </button>
           </div>
-        </>
-      )}
+          {feedback !== null && (
+            <div
+              className="gc-pop"
+              style={{
+                position: "absolute", inset: 0, borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center",
+                background: feedback ? C.spectralSoft : C.brickSoft, opacity: 0.95,
+              }}
+            >
+              {feedback ? <Check size={40} color={C.spectral} /> : <X size={40} color={C.brick} />}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -50,7 +80,7 @@ function ExamQuizQuestion({ question, onAnswer }) {
   const { C } = useTheme();
   const [choix, setChoix] = useState(null);
   return (
-    <div style={{ background: C.white, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
+    <div className="gc-card-in" style={{ background: C.white, border: `1px solid ${C.line}`, borderRadius: 12, padding: 18 }}>
       <div style={{ fontSize: 15, color: C.ink, fontWeight: 700, marginBottom: 12, lineHeight: 1.4 }}>{question.question}</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {question.options.map((opt, i) => {
@@ -64,6 +94,7 @@ function ExamQuizQuestion({ question, onAnswer }) {
             <button
               key={i}
               onClick={() => choix === null && setChoix(i)}
+              className={estChoisie ? "gc-pop" : undefined}
               style={{ textAlign: "left", background: bg, border: `1px solid ${border}`, borderRadius: 8, padding: "10px 12px", fontFamily: uiFont, fontSize: 13.5, color: C.ink, cursor: choix === null ? "pointer" : "default" }}
             >
               {opt}
@@ -173,9 +204,16 @@ export function ExamMode({ flashcards, quiz, onExit, onFinish }) {
     ? `Flashcard ${flashcardIndex + 1} / ${flashcards.length}`
     : `Question ${quizIndex + 1} / ${quiz.length}`;
 
+  // Une seule barre continue sur toute la session (flashcards puis quiz),
+  // plutôt qu'une barre qui repart de zéro à chaque phase — donne un sens
+  // de progression d'ensemble, façon appli de révision.
+  const totalItems = flashcards.length + quiz.length;
+  const itemsFaits = enFlashcards ? flashcardIndex : flashcards.length + quizIndex;
+  const pourcentageFait = totalItems > 0 ? Math.round((itemsFaits / totalItems) * 100) : 0;
+
   return (
     <div className="gc-materialize">
-      <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
+      <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
         <span style={{ fontFamily: uiFont, fontSize: 11.5, fontWeight: 700, color: C.inkFaint, letterSpacing: 0.3 }}>
           MODE EXAMEN · {progression.toUpperCase()}
         </span>
@@ -185,6 +223,9 @@ export function ExamMode({ flashcards, quiz, onExit, onFinish }) {
         >
           Quitter
         </button>
+      </div>
+      <div style={{ height: 5, background: C.paperDim, borderRadius: 999, marginBottom: 14, overflow: "hidden" }}>
+        <div style={{ height: "100%", width: `${pourcentageFait}%`, background: C.haunt, borderRadius: 999, transition: "width 350ms ease" }} />
       </div>
       {enFlashcards ? (
         <ExamFlashcard key={flashcardIndex} card={flashcards[flashcardIndex]} onAnswer={repondreFlashcard} />

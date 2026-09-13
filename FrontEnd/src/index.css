@@ -40,6 +40,57 @@ button {
   animation: gc-materialize 450ms ease-out forwards;
 }
 
+/* Mode examen, suite : chaque nouvelle flashcard/question (remontée via
+   `key={index}`, voir ExamMode.jsx) glisse légèrement à l'arrivée plutôt
+   que d'apparaître d'un coup — plus vivant, façon appli de révision. */
+@keyframes gc-card-in {
+  0% { opacity: 0; transform: translateY(8px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+.gc-card-in {
+  animation: gc-card-in 280ms ease-out forwards;
+}
+
+/* Retournement de la flashcard (question -> réponse) : deux faces
+   empilées, la face arrière pré-tournée de 180°, seul le conteneur pivote. */
+.gc-flip {
+  perspective: 1200px;
+}
+
+.gc-flip-inner {
+  position: relative;
+  transition: transform 420ms cubic-bezier(0.4, 0.2, 0.2, 1);
+  transform-style: preserve-3d;
+}
+
+.gc-flip-inner.gc-flip-retournee {
+  transform: rotateY(180deg);
+}
+
+.gc-flip-face {
+  backface-visibility: hidden;
+}
+
+.gc-flip-face-arriere {
+  position: absolute;
+  inset: 0;
+  transform: rotateY(180deg);
+}
+
+/* Petit "pop" pour le check/croix affiché brièvement après une réponse
+   (flashcard "je savais"/"je ne savais pas") avant de passer à la
+   suivante — un retour immédiat, avant même l'avancement automatique. */
+@keyframes gc-pop {
+  0% { opacity: 0; transform: scale(0.5); }
+  60% { opacity: 1; transform: scale(1.15); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+.gc-pop {
+  animation: gc-pop 280ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
 /* --------------------------------------------------------------------- */
 /* Mise en page — barre de nav basse + colonne unique en mobile (défaut),
    colonne latérale + zone de contenu élargie en desktop.                 */
