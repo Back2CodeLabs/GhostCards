@@ -39,7 +39,6 @@ from Services.config import (  # noqa: E402
     DOCUMENTS_DIR,
     SESSION_SECRET_KEY,
     SESSION_COOKIE_SECURE,
-    CLASSE_ATTENDUE,
     ADMIN_PASSWORD,
     IA_ENGINE,
     OLLAMA_URL,
@@ -216,15 +215,17 @@ async def pairer_eleve_pronote(
     1. Le consentement doit être donné.
     2. L'URL Pronote embarquée dans le QR doit être sur le même domaine que
        `pronote_url` (Paramétrage) — pas le bon établissement sinon.
-    3. Une fois connecté, `client.info.class_name` doit correspondre à la
-       classe attendue configurée (Paramétrage) — vide = non vérifié.
+    3. Une fois connecté, `client.info.class_name` doit figurer dans les
+       classes autorisées (écran Paramétrage → Pronote → Classes) —
+       aucune classe enregistrée = non vérifié (comportement historique
+       conservé pour ne pas surprendre un déploiement pas encore configuré).
     """
     if not consentement:
         raise HTTPException(400, "Le consentement à la récupération des données Pronote est obligatoire.")
 
     with db.session() as conn:
         pronote_url_configuree = pronote_sync.config_pronote(conn)["pronote_url"]
-        classe_attendue = db.get_parametre(conn, "classe_attendue", CLASSE_ATTENDUE)
+        classes_ok = db.classes_autorisees(conn)
 
     if not pronote_url_configuree:
         raise HTTPException(503, "Pronote n'est pas configuré sur ce serveur (URL manquante dans Paramétrage).")
@@ -278,11 +279,10 @@ async def pairer_eleve_pronote(
         raise HTTPException(401, "Connexion Pronote refusée (QR code expiré ou code PIN incorrect).")
 
     class_name = client.info.class_name
-    if classe_attendue and class_name.strip().lower() != classe_attendue.strip().lower():
+    if classes_ok and class_name.strip().lower() not in classes_ok:
         raise HTTPException(
             403,
-            f"La classe « {class_name or 'inconnue'} » n'est pas autorisée à se connecter à Ghost School "
-            f"(attendu : « {classe_attendue} »).",
+            f"La classe « {class_name or 'inconnue'} » n'est pas autorisée à se connecter à Ghost School.",
         )
 
     # Connexion Pronote réussie à ce stade : une panne ici (clé de
@@ -398,19 +398,93 @@ def definir_cle_gemini(payload: GeminiClePayload, request: Request):
     return {"ok": True, "gemini_cle_definie": cle_chiffree is not None}
 
 
+def _classe_filtre(conn, request: Request, classe_query: str | None) -> str | None:
+    """
+    Classe à appliquer aux requêtes de contenu (cours/devoirs/matières)
+    pour CETTE requête : un élève voit toujours SA classe
+    (`eleves.pronote_class_name`), jamais un paramètre de requête — un
+    admin voit la classe demandée en paramètre (`?classe=2E`), ou aucun
+    filtre (`None`, les classes mélangées) si absent — vue par défaut
+    décidée pour l'admin.
+    """
+    if request.session.get("is_admin"):
+        return classe_query
+    eleve_id = request.session.get("eleve_id")
+    if not eleve_id:
+        return None
+    row = conn.execute("SELECT pronote_class_name FROM eleves WHERE id = ?", (eleve_id,)).fetchone()
+    return row["pronote_class_name"] if row else None
+
+
+@app.get("/api/classes")
+def list_classes(request: Request):
+    """Classes autorisées au pairage (écran admin Paramétrage → Pronote)."""
+    _require_admin(request)
+    with db.session() as conn:
+        return db.lister_classes(conn)
+
+
+class ClassePayload(BaseModel):
+    nom: str
+
+
+@app.post("/api/classes")
+def ajouter_classe_endpoint(payload: ClassePayload, request: Request):
+    _require_admin(request)
+    nom = payload.nom.strip()
+    if not nom:
+        raise HTTPException(400, "Le nom de la classe ne peut pas être vide.")
+    with db.session() as conn:
+        classe_id = db.ajouter_classe(conn, nom)
+    return {"id": classe_id, "nom": nom}
+
+
+@app.delete("/api/classes/{classe_id}")
+def supprimer_classe_endpoint(classe_id: int, request: Request):
+    _require_admin(request)
+    with db.session() as conn:
+        if conn.execute("SELECT 1 FROM classes WHERE id = ?", (classe_id,)).fetchone() is None:
+            raise HTTPException(404, "Classe introuvable.")
+        try:
+            db.supprimer_classe(conn, classe_id)
+        except db.DerniereClasseError as e:
+            raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
 @app.get("/api/matieres")
-def list_matieres(request: Request):
+def list_matieres(request: Request, classe: str | None = None):
+    """
+    `classe` : optionnel, admin uniquement (voir _classe_filtre) — un élève
+    n'a de toute façon accès qu'à la sienne. Filtrée (JOIN plutôt que LEFT
+    JOIN sur `cours`), une matière sans aucun cours dans cette classe
+    n'apparaît simplement pas — pas la peine de montrer "0 cours" pour une
+    matière propre à l'autre classe.
+    """
     _require_session(request)
     with db.session() as conn:
-        rows = conn.execute(
-            """SELECT m.id, m.nom, m.slug,
-                      COUNT(DISTINCT c.id) AS nb_cours,
-                      COUNT(DISTINCT d.id) AS nb_documents
-               FROM matieres m
-               LEFT JOIN cours c ON c.matiere_id = m.id
-               LEFT JOIN documents d ON d.cours_id = c.id
-               GROUP BY m.id ORDER BY m.nom"""
-        ).fetchall()
+        classe_filtre = _classe_filtre(conn, request, classe)
+        if classe_filtre:
+            rows = conn.execute(
+                """SELECT m.id, m.nom, m.slug,
+                          COUNT(DISTINCT c.id) AS nb_cours,
+                          COUNT(DISTINCT d.id) AS nb_documents
+                   FROM matieres m
+                   JOIN cours c ON c.matiere_id = m.id AND c.classe = ?
+                   LEFT JOIN documents d ON d.cours_id = c.id
+                   GROUP BY m.id ORDER BY m.nom""",
+                (classe_filtre,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT m.id, m.nom, m.slug,
+                          COUNT(DISTINCT c.id) AS nb_cours,
+                          COUNT(DISTINCT d.id) AS nb_documents
+                   FROM matieres m
+                   LEFT JOIN cours c ON c.matiere_id = m.id
+                   LEFT JOIN documents d ON d.cours_id = c.id
+                   GROUP BY m.id ORDER BY m.nom"""
+            ).fetchall()
         return [dict(r) for r in rows]
 
 
@@ -426,16 +500,27 @@ _COMPTES_COURS_SQL = """
 
 
 @app.get("/api/matieres/{matiere_id}/cours")
-def list_cours(matiere_id: int, request: Request):
+def list_cours(matiere_id: int, request: Request, classe: str | None = None):
     _require_session(request)
     with db.session() as conn:
-        rows = conn.execute(
-            f"""SELECT c.id, c.date, c.heure_debut, c.heure_fin, c.professeur, c.titre,
-                       c.contenu_recupere, c.ia_statut, c.annule, c.statut, c.salle, c.groupe,
-                       c.memo, c.devoir_surveille, {_COMPTES_COURS_SQL}
-                FROM cours c WHERE c.matiere_id = ? ORDER BY c.date DESC, c.heure_debut DESC""",
-            (matiere_id,),
-        ).fetchall()
+        classe_filtre = _classe_filtre(conn, request, classe)
+        if classe_filtre:
+            rows = conn.execute(
+                f"""SELECT c.id, c.date, c.heure_debut, c.heure_fin, c.professeur, c.titre,
+                           c.contenu_recupere, c.ia_statut, c.annule, c.statut, c.salle, c.groupe,
+                           c.memo, c.devoir_surveille, {_COMPTES_COURS_SQL}
+                    FROM cours c WHERE c.matiere_id = ? AND c.classe = ?
+                    ORDER BY c.date DESC, c.heure_debut DESC""",
+                (matiere_id, classe_filtre),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                f"""SELECT c.id, c.date, c.heure_debut, c.heure_fin, c.professeur, c.titre,
+                           c.contenu_recupere, c.ia_statut, c.annule, c.statut, c.salle, c.groupe,
+                           c.memo, c.devoir_surveille, {_COMPTES_COURS_SQL}
+                    FROM cours c WHERE c.matiere_id = ? ORDER BY c.date DESC, c.heure_debut DESC""",
+                (matiere_id,),
+            ).fetchall()
         return [dict(r) for r in rows]
 
 
@@ -467,7 +552,7 @@ def list_notes_matiere(matiere_id: int, request: Request):
 
 
 @app.get("/api/cours/suggestion-ia")
-def suggestion_ia(request: Request):
+def suggestion_ia(request: Request, classe: str | None = None):
     """
     Un seul cours à mettre en avant sur l'accueil ("Quiz du jour") pour que
     la génération IA (résumé/flashcards/quiz) saute aux yeux — retour de
@@ -488,19 +573,24 @@ def suggestion_ia(request: Request):
     """
     _require_session(request)
     with db.session() as conn:
+        classe_filtre = _classe_filtre(conn, request, classe)
+        classe_clause = "AND c.classe = ?" if classe_filtre else ""
+        params = (classe_filtre,) if classe_filtre else ()
+
         pret = conn.execute(
-            """SELECT c.id, m.nom AS matiere, c.titre
+            f"""SELECT c.id, m.nom AS matiere, c.titre
                FROM cours c JOIN matieres m ON m.id = c.matiere_id
-               WHERE c.ia_statut = 'pret'
-               ORDER BY c.date DESC, c.heure_debut DESC LIMIT 1"""
+               WHERE c.ia_statut = 'pret' {classe_clause}
+               ORDER BY c.date DESC, c.heure_debut DESC LIMIT 1""",
+            params,
         ).fetchone()
         if pret:
             return {"id": pret["id"], "matiere": pret["matiere"], "titre": pret["titre"], "pret": True}
 
         a_generer = conn.execute(
-            """SELECT c.id, m.nom AS matiere, c.titre
+            f"""SELECT c.id, m.nom AS matiere, c.titre
                FROM cours c JOIN matieres m ON m.id = c.matiere_id
-               WHERE c.ia_statut IN ('absent', 'echec')
+               WHERE c.ia_statut IN ('absent', 'echec') {classe_clause}
                  AND (
                    (c.description IS NOT NULL AND c.description != '')
                    OR EXISTS (
@@ -508,7 +598,8 @@ def suggestion_ia(request: Request):
                      WHERE d.cours_id = c.id AND d.texte_extrait IS NOT NULL AND d.texte_extrait != ''
                    )
                  )
-               ORDER BY c.date DESC, c.heure_debut DESC LIMIT 1"""
+               ORDER BY c.date DESC, c.heure_debut DESC LIMIT 1""",
+            params,
         ).fetchone()
         if a_generer:
             return {"id": a_generer["id"], "matiere": a_generer["matiere"], "titre": a_generer["titre"], "pret": False}
@@ -516,7 +607,7 @@ def suggestion_ia(request: Request):
 
 
 @app.get("/api/cours/du-jour")
-def cours_du_jour(request: Request):
+def cours_du_jour(request: Request, classe: str | None = None):
     """
     Emploi du temps du jour — affiché sur l'accueil à la place de la liste
     des matières (déjà consultable depuis l'onglet Matières, doublon
@@ -531,35 +622,41 @@ def cours_du_jour(request: Request):
     _require_session(request)
     aujourdhui = date.today().isoformat()
     with db.session() as conn:
+        classe_filtre = _classe_filtre(conn, request, classe)
+        classe_clause = "AND c.classe = ?" if classe_filtre else ""
+        params = (aujourdhui, classe_filtre) if classe_filtre else (aujourdhui,)
         rows = conn.execute(
             f"""SELECT c.id, c.heure_debut, c.heure_fin, c.professeur, c.salle, c.groupe, c.memo,
                        c.annule, c.statut, c.devoir_surveille, c.ia_statut, m.nom AS matiere, m.id AS matiere_id,
                        {_COMPTES_COURS_SQL}
                 FROM cours c JOIN matieres m ON m.id = c.matiere_id
-                WHERE c.date = ? ORDER BY c.heure_debut""",
-            (aujourdhui,),
+                WHERE c.date = ? {classe_clause} ORDER BY c.heure_debut""",
+            params,
         ).fetchall()
         return [dict(r) for r in rows]
 
 
 @app.get("/api/cours/recents")
-def recent_cours(request: Request, limit: int = 8):
+def recent_cours(request: Request, limit: int = 8, classe: str | None = None):
     _require_session(request)
     with db.session() as conn:
+        classe_filtre = _classe_filtre(conn, request, classe)
+        classe_clause = "AND c.classe = ?" if classe_filtre else ""
+        params = (classe_filtre, limit) if classe_filtre else (limit,)
         rows = conn.execute(
             f"""SELECT c.id, c.date, c.heure_debut, c.titre, c.ia_statut, c.annule, c.salle,
                        c.devoir_surveille, m.nom AS matiere, m.id AS matiere_id,
                        {_COMPTES_COURS_SQL}
                 FROM cours c JOIN matieres m ON m.id = c.matiere_id
-                WHERE c.annule = 0
+                WHERE c.annule = 0 {classe_clause}
                 ORDER BY c.created_at DESC LIMIT ?""",
-            (limit,),
+            params,
         ).fetchall()
         return [dict(r) for r in rows]
 
 
 @app.get("/api/cours/non-generes")
-def cours_non_generes(request: Request):
+def cours_non_generes(request: Request, classe: str | None = None):
     """
     Cours sans résumé/flashcards/quiz (jamais générés, ou dernière tentative
     en échec) qui ont pourtant de quoi générer (description et/ou document
@@ -567,6 +664,7 @@ def cours_non_generes(request: Request):
     sert à l'écran admin "Traitements" pour déclencher la génération sans
     avoir à ouvrir chaque cours un par un. Les cours sans aucune source
     n'apparaissent pas ici : les lister sans rien à en tirer n'aiderait pas.
+    `classe` : filtre optionnel (sélecteur de classe admin).
 
     Déclarée ici, AVANT /api/cours/{cours_id} : une route à paramètre du
     même préfixe capturerait sinon "non-generes" comme un id (voir
@@ -574,10 +672,12 @@ def cours_non_generes(request: Request):
     """
     _require_admin(request)
     with db.session() as conn:
+        classe_clause = "AND c.classe = ?" if classe else ""
+        params = (classe,) if classe else ()
         rows = conn.execute(
-            """SELECT c.id, c.date, c.heure_debut, c.titre, m.nom AS matiere, c.ia_statut, c.ia_erreur
+            f"""SELECT c.id, c.date, c.heure_debut, c.titre, m.nom AS matiere, c.ia_statut, c.ia_erreur
                FROM cours c JOIN matieres m ON m.id = c.matiere_id
-               WHERE c.ia_statut IN ('absent', 'echec')
+               WHERE c.ia_statut IN ('absent', 'echec') {classe_clause}
                  AND (
                    (c.description IS NOT NULL AND c.description != '')
                    OR EXISTS (
@@ -585,7 +685,8 @@ def cours_non_generes(request: Request):
                      WHERE d.cours_id = c.id AND d.texte_extrait IS NOT NULL AND d.texte_extrait != ''
                    )
                  )
-               ORDER BY c.date DESC, c.heure_debut DESC"""
+               ORDER BY c.date DESC, c.heure_debut DESC""",
+            params,
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -597,6 +698,13 @@ def get_cours(cours_id: int, request: Request):
         cours = conn.execute("SELECT * FROM cours WHERE id = ?", (cours_id,)).fetchone()
         if cours is None:
             raise HTTPException(404, "Cours introuvable")
+        # Empêche un élève d'ouvrir un cours d'une autre classe en devinant/
+        # collant un id (les listes, elles, le filtrent déjà) — `None` pour
+        # l'admin (voir _classe_filtre) ou une ligne pas encore migrée
+        # (`cours["classe"]` NULL) laisse passer sans vérifier.
+        classe_eleve = _classe_filtre(conn, request, None)
+        if classe_eleve and cours["classe"] and cours["classe"] != classe_eleve:
+            raise HTTPException(403, "Ce cours n'appartient pas à ta classe.")
         documents = conn.execute(
             "SELECT id, nom_fichier, url_externe FROM documents WHERE cours_id = ?", (cours_id,)
         ).fetchall()
@@ -837,13 +945,39 @@ def _traitement_vers_dict(row) -> dict:
     return d
 
 
+def _classe_traitement(conn, t) -> str | None:
+    """
+    Classe du cours/document concerné par ce traitement, si déterminable.
+    `None` pour un type qui n'est pas lié à un seul cours (ex.
+    'pronote_sync', qui couvre potentiellement plusieurs classes à la
+    fois) — ces lignes-là restent toujours visibles, filtre ou pas (voir
+    list_traitements).
+    """
+    if t["cible_type"] == "cours":
+        row = conn.execute("SELECT classe FROM cours WHERE id = ?", (t["cible_id"],)).fetchone()
+        return row["classe"] if row else None
+    if t["cible_type"] == "document":
+        doc = conn.execute("SELECT cours_id, devoir_id FROM documents WHERE id = ?", (t["cible_id"],)).fetchone()
+        return _classe_parent_document(conn, doc) if doc else None
+    return None
+
+
 @app.get("/api/traitements")
-def list_traitements(request: Request, limit: int = 50):
+def list_traitements(request: Request, limit: int = 50, classe: str | None = None):
+    """
+    `classe` : filtre optionnel (sélecteur de classe admin) — sur-fetch
+    quand actif (voir _classe_traitement) pour continuer à renvoyer
+    jusqu'à `limit` lignes après filtrage, plutôt que d'appliquer LIMIT
+    avant de filtrer et renvoyer parfois moins que demandé.
+    """
     _require_admin(request)
     with db.session() as conn:
+        fetch_limit = limit * 4 if classe else limit
         rows = conn.execute(
-            "SELECT * FROM traitements ORDER BY id DESC LIMIT ?", (limit,)
+            "SELECT * FROM traitements ORDER BY id DESC LIMIT ?", (fetch_limit,)
         ).fetchall()
+        if classe:
+            rows = [r for r in rows if _classe_traitement(conn, r) in (None, classe)][:limit]
         return [_traitement_vers_dict(r) for r in rows]
 
 
@@ -868,7 +1002,7 @@ def relancer_traitement(traitement_id: int, request: Request, background_tasks: 
 
 
 @app.get("/api/documents/non-transcrits")
-def documents_non_transcrits(request: Request):
+def documents_non_transcrits(request: Request, classe: str | None = None):
     """
     Documents Pronote sans texte extrait : soit jamais transcrits (aucune
     ligne `traitements` pour eux — ex. téléchargés avant la mise en place
@@ -876,20 +1010,23 @@ def documents_non_transcrits(request: Request):
     (`texte_extrait` reste NULL dans les deux cas — voir Services/ocr.py).
     Sert à l'écran admin "Traitements" pour proposer un déclenchement
     manuel, faute de ligne `traitements` existante à relancer pour le
-    premier cas.
+    premier cas. `classe` : filtre optionnel (sélecteur de classe admin).
     """
     _require_admin(request)
     with db.session() as conn:
+        classe_clause = "AND COALESCE(c.classe, dv.classe) = ?" if classe else ""
+        params = (classe,) if classe else ()
         rows = conn.execute(
-            """SELECT d.id, d.nom_fichier, d.created_at, m.nom AS matiere,
+            f"""SELECT d.id, d.nom_fichier, d.created_at, m.nom AS matiere,
                       (SELECT statut FROM traitements WHERE cible_type = 'document' AND cible_id = d.id ORDER BY id DESC LIMIT 1) AS dernier_statut,
                       (SELECT erreur FROM traitements WHERE cible_type = 'document' AND cible_id = d.id ORDER BY id DESC LIMIT 1) AS derniere_erreur
                FROM documents d
                LEFT JOIN cours c ON d.cours_id = c.id
                LEFT JOIN devoirs dv ON d.devoir_id = dv.id
                LEFT JOIN matieres m ON m.id = COALESCE(c.matiere_id, dv.matiere_id)
-               WHERE d.texte_extrait IS NULL AND d.chemin_local NOT LIKE 'lien:%'
-               ORDER BY d.created_at DESC"""
+               WHERE d.texte_extrait IS NULL AND d.chemin_local NOT LIKE 'lien:%' {classe_clause}
+               ORDER BY d.created_at DESC""",
+            params,
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -981,7 +1118,6 @@ def get_parametres(request: Request):
         matieres_exclues = db.get_parametre(
             conn, "matieres_exclues", "Réunion parents-profs, Journée du sport scolaire"
         )
-        classe_attendue = db.get_parametre(conn, "classe_attendue", CLASSE_ATTENDUE)
     return {
         "ia_moteur": moteur if moteur in ("ollama", "gemini", "claude") else "ollama",
         "ollama_url": ollama_url or OLLAMA_URL,
@@ -1005,7 +1141,6 @@ def get_parametres(request: Request):
         "sync_days_back": pronote_cfg["sync_days_back"],
         "sync_days_forward": pronote_cfg["sync_days_forward"],
         "matieres_exclues": matieres_exclues,
-        "classe_attendue": classe_attendue,
         "pronote_jeton_present": CREDENTIALS_PATH.exists(),
         "ocr_engine": ocr_cfg["moteur"],
         "paddleocr_enable_mkldnn": ocr_cfg["paddleocr_enable_mkldnn"],
@@ -1051,7 +1186,6 @@ class ParametresIA(BaseModel):
     sync_days_back: int | None = None
     sync_days_forward: int | None = None
     matieres_exclues: str | None = None
-    classe_attendue: str | None = None
     ocr_engine: str | None = None
     paddleocr_enable_mkldnn: bool | None = None
     verif_moteur: str | None = None
@@ -1103,8 +1237,6 @@ def set_parametres(payload: ParametresIA, request: Request):
             db.set_parametre(conn, "sync_days_forward", str(payload.sync_days_forward))
         if payload.matieres_exclues is not None:
             db.set_parametre(conn, "matieres_exclues", payload.matieres_exclues)
-        if payload.classe_attendue is not None:
-            db.set_parametre(conn, "classe_attendue", payload.classe_attendue)
         if payload.ocr_engine:
             db.set_parametre(conn, "ocr_engine", payload.ocr_engine)
         if payload.paddleocr_enable_mkldnn is not None:
@@ -1121,13 +1253,17 @@ def set_parametres(payload: ParametresIA, request: Request):
 
 
 @app.get("/api/devoirs")
-def list_devoirs(request: Request):
+def list_devoirs(request: Request, classe: str | None = None):
     _require_session(request)
     with db.session() as conn:
+        classe_filtre = _classe_filtre(conn, request, classe)
+        classe_clause = "AND d.classe = ?" if classe_filtre else ""
+        params = (classe_filtre,) if classe_filtre else ()
         rows = conn.execute(
-            """SELECT d.id, d.date_rendu, d.description, d.fait, m.nom AS matiere
+            f"""SELECT d.id, d.date_rendu, d.description, d.fait, m.nom AS matiere
                FROM devoirs d JOIN matieres m ON m.id = d.matiere_id
-               WHERE d.fait = 0 ORDER BY d.date_rendu"""
+               WHERE d.fait = 0 {classe_clause} ORDER BY d.date_rendu""",
+            params,
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -1150,6 +1286,25 @@ def _reponse_fichier(chemin_local: str | None, nom_fichier: str, *, inline: bool
     )
 
 
+def _classe_parent_document(conn, doc) -> str | None:
+    """Classe du cours/devoir parent d'un document (l'un des deux id est toujours NULL)."""
+    if doc["cours_id"]:
+        row = conn.execute("SELECT classe FROM cours WHERE id = ?", (doc["cours_id"],)).fetchone()
+    elif doc["devoir_id"]:
+        row = conn.execute("SELECT classe FROM devoirs WHERE id = ?", (doc["devoir_id"],)).fetchone()
+    else:
+        return None
+    return row["classe"] if row else None
+
+
+def _verifier_classe_document(conn, request: Request, doc) -> None:
+    """Même garde-fou que get_cours, appliqué aux documents (téléchargement/aperçu)."""
+    classe_eleve = _classe_filtre(conn, request, None)
+    classe_doc = _classe_parent_document(conn, doc)
+    if classe_eleve and classe_doc and classe_doc != classe_eleve:
+        raise HTTPException(403, "Ce document n'appartient pas à ta classe.")
+
+
 @app.get("/api/documents/{document_id}/fichier")
 def download_document(document_id: int, request: Request):
     _require_session(request)
@@ -1157,6 +1312,7 @@ def download_document(document_id: int, request: Request):
         doc = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
         if doc is None:
             raise HTTPException(404, "Document introuvable")
+        _verifier_classe_document(conn, request, doc)
     return _reponse_fichier(doc["chemin_local"], doc["nom_fichier"], inline=False)
 
 
@@ -1167,6 +1323,7 @@ def apercu_document(document_id: int, request: Request):
         doc = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
         if doc is None:
             raise HTTPException(404, "Document introuvable")
+        _verifier_classe_document(conn, request, doc)
     return _reponse_fichier(doc["chemin_local"], doc["nom_fichier"], inline=True)
 
 
