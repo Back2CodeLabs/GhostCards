@@ -163,11 +163,16 @@ liste des modèles réellement installés plutôt que de taper le nom à la
 main. Chaque moteur cloud (Claude, Gemini) a sa propre clé, jamais
 réutilisée automatiquement pour l'autre.
 
-Pourquoi pas la connexion Google des élèves pour utiliser leur propre
-Gemini ? Vérifié : "Sign in with Google" ne donne aucun accès à l'API
-Gemini, il n'existe pas de mécanisme OAuth pour ça — chaque compte
-devrait créer sa propre clé manuellement sur aistudio.google.com, pas
-réaliste pour une classe.
+**Clé Gemini personnelle par élève** (écran "Profil", voir plus bas) :
+"Sign in with Google" ne donne aucun accès à l'API Gemini (pas de
+mécanisme OAuth pour ça) — chaque élève colle donc manuellement sa propre
+clé, créée gratuitement sur aistudio.google.com. Quand un élève avec sa
+propre clé déclenche une génération, elle prime **toujours** sur le
+moteur choisi par l'admin pour cette génération précise (voir
+`_avec_cle_gemini_perso`) — répartit la charge/le quota entre plusieurs
+clés personnelles plutôt que tout faire peser sur celle, partagée, de
+l'admin. Même principe que le pairage Pronote par élève : chacun apporte
+sa propre ressource plutôt que de tout faire passer par un seul compte.
 
 Génération déclenchée depuis le bouton "Générer" sur la page d'un cours
 — aucune commande manuelle nécessaire. Compter jusqu'à ~30 minutes pour
@@ -207,14 +212,25 @@ voir plus bas si besoin.)
 
 ### Comment un élève se connecte
 
+Un visiteur non connecté arrive sur une vraie page d'accueil (pitch +
+bouton "Se connecter", `FrontEnd/src/screens/Landing.jsx`) plutôt que
+d'être plongé directement dans le formulaire de pairage.
+
 Sur Pronote (ordinateur ou téléphone) : **Mon compte → Configuration de mon
 compte → Connexion via smartphone**, qui affiche un QR code et un PIN à 4
 chiffres (même procédure que la "Première connexion" de l'admin plus haut).
-Sur Ghost School, écran de connexion : upload d'une capture d'écran du QR
-code + saisie du PIN. Le serveur décode le QR (OpenCV), se connecte à
-Pronote avec (`pronotepy.Client.qrcode_login`), vérifie établissement et
-classe, puis pose un cookie de session classique — une seule fois par
-appareil, pas à chaque visite. Le QR n'est valable que ~10 minutes.
+Sur Ghost School, écran de connexion : upload d'une photo/capture d'écran
+du QR code — avec une étape de recadrage (zone ajustable + zoom,
+`FrontEnd/src/components/CropQr.jsx`) avant l'envoi, pour ne garder que le
+QR et améliorer la détection sur une vraie photo de téléphone (moins
+fiable qu'une capture d'écran nette) — puis saisie du PIN. Un lien
+« Coller le code à la place » permet aussi de saisir directement le JSON
+du QR si la détection d'image échoue malgré tout. Le serveur décode le QR
+(OpenCV, plusieurs tailles essayées en repli — voir `_decoder_qr_image`,
+`BackEnd/app/main.py`), se connecte à Pronote avec
+(`pronotepy.Client.qrcode_login`), vérifie établissement et classe, puis
+pose un cookie de session classique — une seule fois par appareil, pas à
+chaque visite. Le QR n'est valable que ~10 minutes.
 
 ### Configuration requise dans `.env`
 
@@ -242,7 +258,31 @@ avec une erreur claire plutôt que de stocker les jetons en clair.
   vérification. Chaque cours/devoir synchronisé est rattaché à la classe
   de l'élève (ou du compte de référence) qui l'a récupéré — un élève ne
   voit jamais le contenu d'une autre classe (voir `_classe_filtre`,
-  `BackEnd/app/main.py`).
+  `BackEnd/app/main.py`), ni en navigant ni en devinant l'id d'un cours
+  (`GET /api/cours/{id}` vérifie aussi l'appartenance).
+
+Pas besoin d'un second compte de référence pour ajouter une classe : comme
+pour les groupes (LV2/options) d'une classe déjà connue, le contenu de la
+nouvelle classe arrive dès qu'au moins un de ses élèves a pairé son propre
+compte — chaque compte synchronisé apporte sa propre classe (déduite de
+`client.info.class_name`), pas seulement son propre groupe.
+
+### Admin : filtrer par classe
+
+Deux endroits distincts :
+- **Filtre de consultation** (rangée d'onglets "Toutes / 2F / 2E...",
+  `FrontEnd/src/components/Shared.jsx::ClasseTabs`) sur les écrans
+  Accueil, Matières et Élèves (ce dernier ajoute une seconde rangée pour
+  filtrer par groupe une fois une classe sélectionnée) — toujours visible
+  dès qu'il y a au moins une classe enregistrée, même une seule. Un élève,
+  lui, ne voit jamais ce filtre : sa classe est toujours résolue depuis sa
+  propre session, jamais un paramètre de requête.
+- **Gestion des classes autorisées** (Paramétrage → Pronote →
+  "Classes autorisées", `FrontEnd/src/screens/ParametresScreen.jsx::
+  ClassesManager`) : ajout/suppression d'une classe, action immédiate
+  (pas intégrée au formulaire "Enregistrer" global) — refuse de supprimer
+  la dernière classe restante (rouvrirait le pairage à n'importe quelle
+  classe par accident).
 
 ### Admin : gérer les comptes élèves
 
@@ -250,6 +290,31 @@ avec une erreur claire plutôt que de stocker les jetons en clair.
 lien Pronote cassé ou non), et un bouton "Re-pairer" qui efface le jeton
 stocké — l'élève reprendra le flux de connexion (upload QR + PIN) à sa
 prochaine visite.
+
+## Profil élève
+
+Écran "Profil" (onglet dédié, élèves uniquement — jamais visible de
+l'admin) : identité en lecture seule (nom, classe, groupe — Pronote fait
+déjà foi, rien à modifier ici) et un champ pour associer sa propre clé
+Gemini personnelle (voir "Génération IA" plus haut). Chiffrée au repos
+comme les identifiants Pronote (`Services/crypto_secrets.py`), jamais
+renvoyée en clair au navigateur une fois enregistrée — seul un statut
+"clé enregistrée : oui/non" est exposé.
+
+## Matières à exclure
+
+Certains créneaux Pronote ne sont pas de vraies matières (réunions
+parents-profs, journées spéciales...) — propre à chaque établissement,
+impossible à deviner automatiquement. La synchro **ingère tout sans
+exception** (`Services/pronote_sync.py` ne filtre plus rien à l'import) ;
+c'est l'admin qui masque après coup, depuis Paramétrage → Pronote →
+"Matières à exclure", une case à cocher par matière **déjà récupérée** —
+plutôt qu'une liste de noms tapés à l'avance (l'ancien mécanisme, qui
+empêchait purement l'import et ne nettoyait jamais rétroactivement ce qui
+était déjà en base). Une matière exclue disparaît de l'accueil, des
+matières, des devoirs et de "Quiz du jour"/"cours à générer", mais reste
+synchronisée en arrière-plan — décocher la re-fait apparaître
+immédiatement, sans attendre une resynchronisation.
 
 ## Exposer le site hors du réseau local (HTTPS)
 

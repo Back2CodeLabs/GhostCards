@@ -1,16 +1,23 @@
-# Ghost School — Passation (état au 8 septembre 2026)
+# Ghost School — Passation (état au 13 septembre 2026)
 
 Ce document résume tout ce qu'il faut savoir pour reprendre le projet dans
 Claude Code sans repartir de zéro ni recasser ce qui fonctionne déjà. Les
 `README.md` (racine, `BackEnd/`, `Services/`) restent la doc de référence
 pour l'installation et l'usage — ce fichier-ci est plutôt le "journal de
-bord" des décisions et de l'état d'avancement.
+bord" des décisions et de l'état d'avancement. Sections dans l'ordre
+chronologique des sessions ; la plus récente (13 septembre) est la plus
+fiable si une section plus ancienne semble la contredire — l'appli a
+beaucoup changé depuis le tout début du projet (ex. connexion Google →
+pairage Pronote par élève, une seule classe → plusieurs).
 
 ## Qui, quoi
 
-Cédric construit Ghost School pour la classe de 3ème B : synchro Pronote,
-révision par flashcards/quiz générés par IA, notes collaboratives. Auto-hébergé
-sur son OptiPlex personnel (Linux).
+Cédric construit Ghost School pour sa classe — au départ une seule classe
+(2F), l'appli gère maintenant plusieurs classes en parallèle sur la même
+instance (2F et 2E au 13 septembre) : synchro Pronote (chaque élève avec
+son propre compte), révision par flashcards/quiz générés par IA, notes
+collaboratives. Auto-hébergé sur son OptiPlex personnel (Linux), exposé en
+HTTPS sur `ghostschool.app` depuis le 12 septembre.
 
 ## Environnement réel de Cédric (à ne pas casser)
 
@@ -437,16 +444,225 @@ une vraie clé avant de considérer Gemini fiable en prod. Le modèle est
 éditable dans l'écran Paramétrage si le nom par défaut est erroné ou
 déprécié.
 
+## État — fonctionnel et testé (suite du 10 au 13 septembre 2026 : pairage Pronote par élève, HTTPS, multi-classe, profil)
+
+Session la plus dense du projet à ce jour : passage d'un site à
+consultation libre + connexion Google (pour attribuer des notes
+déposées) à un site **entièrement verrouillé**, où chaque élève
+s'authentifie avec son propre compte Pronote. Puis exposition réelle en
+HTTPS, premiers retours d'élèves réels, et enfin support de plusieurs
+classes sur la même instance.
+
+### Pairage Pronote par élève (remplace la connexion Google)
+
+Décision prise en mode plan (voir `C:\Users\cbarbotin\.claude\plans\` sur
+la machine de Cédric si le fichier existe encore — sinon, l'essentiel est
+ici) après avoir constaté que le compte Pronote unique de l'admin ne
+voyait pas les groupes (LV2, options) des autres élèves, et qu'aucune
+liste blanche par email n'était possible (Cédric ne connaît pas les
+adresses de ses camarades). Solution : chaque élève scanne son PROPRE QR
+Pronote (même mécanisme que la première connexion admin,
+`Services/scripts/first_login.py`), ce qui sert à la fois d'identité
+vérifiée (établissement + classe) et de source de synchro pour son propre
+groupe.
+
+Points clés (détail complet dans `Services/README.md`, sections
+"Authentification élève" et "Profil élève") :
+- **Consentement explicite** avant tout pairage : case à cocher après une
+  liste précise de ce qui sera récupéré (partagé avec la classe vs gardé
+  privé), horodatage enregistré comme preuve
+  (`eleves.consentement_pronote_le`).
+- **Chiffrement au repos** des identifiants Pronote de chaque élève
+  (`Services/crypto_secrets.py`, Fernet, clé `CREDENTIALS_ENCRYPTION_KEY`)
+  — délibérément séparé du `credentials.json` en clair de l'admin, vu la
+  sensibilité bien supérieure (accès à de vrais comptes scolaires de
+  mineurs, multiplié par 36).
+- **Synchro multi-comptes** : la boucle de synchro (`Services/
+  pronote_sync.py::sync()`) couvre désormais le compte de référence PUIS
+  chaque élève pairé, étalés de 5 s (`STAGGER_ELEVES_S`) pour ne pas
+  déclencher le rate-limit Pronote ("erreur 25"). Un compte cassé
+  (jeton expiré, réseau) n'interrompt jamais les autres — statut/erreur
+  par élève visibles dans l'écran admin "Élèves", avec un bouton
+  "Re-pairer" qui force une nouvelle connexion.
+- **Notes personnelles** (`notes_pronote.eleve_id`) scopées par élève —
+  jamais mélangées ; **cours/devoirs/documents** restent partagés classe
+  entière, dédupliqués par clé stable (date+heure+matière+professeur, ou
+  date+matière+description pour les devoirs — voir plus bas pour la
+  correction multi-classe de cette clé).
+- **Détection du QR sur une vraie photo de téléphone** : `cv2.
+  QRCodeDetector` s'est montré très sensible à la résolution native d'une
+  photo réelle (moiré/reflets d'écran), avec des échecs constatés sur deux
+  vraies photos fournies par un élève testeur — corrigé par
+  `_decoder_qr_image` (`BackEnd/app/main.py`), qui réessaie plusieurs
+  tailles de redimensionnement avant d'abandonner. Un lien "Coller le code
+  à la place" reste en secours (colle directement le JSON décodé par une
+  autre appli). Ajout ensuite d'un vrai recadrage (zone ajustable + zoom,
+  `FrontEnd/src/components/CropQr.jsx`) avant l'envoi, pour réduire encore
+  les échecs et les données envoyées.
+- **Doublons `eleves` constatés en prod** : `pronote_id` (`ClientInfo.id`
+  pronotepy) a d'abord été supposé stable pour un même compte réel — FAUX,
+  c'est un id de ressource "à usage interne" régénéré à chaque nouvelle
+  session/pairage. Un même élève re-pairé (ex. après déconnexion de
+  l'appli Pronote côté téléphone) produisait donc une deuxième ligne
+  `eleves`. Corrigé : `upsert_eleve_pronote` (`Services/db.py`) matche
+  désormais par nom normalisé (classe fermée de élèves connus, homonyme
+  extrêmement improbable), avec une migration (`_fusionner_eleves_
+  dupliques`) qui fusionne les doublons déjà en base au démarrage — groupe
+  désormais par (nom, classe) depuis le passage au multi-classe, pour
+  qu'un homonyme entre deux classes différentes ne soit jamais fusionné à
+  tort.
+
+### Exposition HTTPS (`ghostschool.app`)
+
+Domaine acheté et pointé vers l'IP publique de la box de Cédric, ports 80
+ET 443 redirigés vers l'OptiPlex, Caddy installé et configuré
+(`BackEnd/deploy/Caddyfile`) — obtient et renouvelle automatiquement un
+certificat Let's Encrypt. **Confirmé fonctionnel** (élève et admin) depuis
+le 12 septembre — voir `Services/README.md` pour la procédure complète.
+
+Deux incidents réels rencontrés et résolus pendant la mise en place :
+- **Conflit de port 443** entre Caddy et `tailscale serve` (déjà lié à ce
+  port, sur l'interface Tailscale, pour un usage tailnet sans rapport) —
+  Caddy échouait au démarrage (`bind: address already in use`). Corrigé
+  en restreignant Caddy à l'IP réseau locale précise de l'OptiPlex
+  (directive `bind` dans le Caddyfile), sans toucher à la config
+  Tailscale existante.
+- **`.env` corrompu par un octet non-UTF-8** après une édition à la main
+  sur l'OptiPlex (déjà documenté ci-dessous dans "Bugs déjà rencontrés") —
+  a fait tomber le service entièrement, sans rapport avec le code déployé.
+
+`SESSION_COOKIE_SECURE=true` activé dans `.env` une fois HTTPS confirmé
+(marque le cookie de session "Secure" — voir `Services/config.py`,
+volontairement pas activé par défaut pour ne pas casser un accès de
+diagnostic en HTTP simple avant que HTTPS ne soit en place).
+
+### Premiers retours réels (élèves testeurs)
+
+Une fois déployé, premiers vrais élèves pairés — retours pris en compte :
+- **Page d'accueil** : le site plongeait directement dans le formulaire de
+  pairage pour un visiteur non connecté, alors qu'un bouton "Se connecter"
+  existe déjà dans l'en-tête. Remplacé par une vraie page d'accueil
+  (`FrontEnd/src/screens/Landing.jsx`, pitch + bouton), le formulaire ne
+  s'affichant plus que sur clic. Salutation personnalisée une fois
+  connecté ("Bonjour Prénom" pour un élève, "Bonjour Maître Fantôme" pour
+  l'admin — voir `prenomDe`, `FrontEnd/src/components/Shared.jsx`, qui
+  isole le prénom du "NOM Prénom" renvoyé par Pronote).
+- **Après pairage réussi, l'écran de connexion restait affiché** (jamais
+  dépilé de la pile de navigation) — corrigé, même mécanisme que la
+  connexion admin.
+- **Message d'erreur PIN incorrect peu clair** : une réponse brute de
+  pronotepy en anglais ("invalid confirmation code") remontait telle
+  quelle — remplacée par un message dédié en français avec l'action à
+  faire. Une panne après connexion Pronote réussie (chiffrement, base)
+  remontait aussi une erreur 500 muette — message clair côté élève
+  désormais, détail complet dans les logs serveur.
+- **Interface flashcards/quiz jugée peu "ludique"** (comparée à Duolingo)
+  : ajout d'un retournement de carte (question → réponse) au lieu d'un
+  changement de contenu brut, d'une barre de progression continue sur
+  toute la session (flashcards puis quiz), d'un petit retour visuel
+  (check/croix) avant de passer à la carte suivante, et d'une légère
+  animation d'entrée sur chaque nouvelle carte (`FrontEnd/src/components/
+  ExamMode.jsx`).
+- **Génération IA peu découvrable** : un élève ne savait pas que Ghost
+  School pouvait générer résumé/flashcards/quiz, reléguée à une petite
+  icône dans les listes de cours. Ajout d'un bandeau "Quiz du jour" tout
+  en haut de l'accueil (`GET /api/cours/suggestion-ia`), qui met en avant
+  un cours déjà prêt à réviser, ou à défaut un cours qu'on peut générer.
+  A révélé au passage un vrai bug : un cours avec seulement une
+  description (sans document ni note) était traité à tort comme "sans
+  contenu" et n'affichait jamais le bouton "Générer" côté frontend, alors
+  que le serveur sait très bien générer à partir de la seule description
+  — corrigé.
+- **Aperçu de lien** (WhatsApp, Discord...) au partage de l'URL : balises
+  Open Graph/Twitter + une image dédiée (`FrontEnd/public/og-image.png`,
+  générée en reproduisant exactement les couleurs/l'effet de fondu de
+  l'en-tête de l'app). Point à savoir : WhatsApp met en cache l'aperçu
+  d'un lien déjà partagé une fois — un lien déjà envoyé avant l'ajout des
+  balises reste "sans aperçu" tant qu'il n'est pas repartagé avec un
+  paramètre différent (ex. `?v=2`), ou revérifié via le Sharing Debugger
+  de Facebook ("Scrape Again").
+
+### Support de plusieurs classes (2F, 2E...)
+
+Envisagé après les premiers retours ("j'envisage d'ajouter la classe 2E"),
+cadré en mode plan avant de développer vu l'ampleur (comparable au passage
+au pairage par élève). Le point de départ : jusque-là, **rien** dans les
+tables de contenu partagé (`matieres`/`cours`/`devoirs`/`documents`)
+n'avait de notion de classe — tout mélangeait déjà deux classes réelles si
+elles avaient existé, avec un vrai risque de collision de déduplication
+(voir plus bas).
+
+- **`classe` sur `cours`/`devoirs`** (pas sur `matieres`, qui reste un
+  vocabulaire de matières partagé entre classes), dérivée de
+  `client.info.class_name` à chaque connexion — recherche confirmée sur
+  `pronotepy` : `.lessons()` d'un compte est déjà intrinsèquement scopé à
+  son propre établissement/classe, le mélange venait uniquement de la
+  fusion faite par Ghost School, pas de la librairie. Pas besoin d'un
+  second compte de référence pour 2E : comme pour les groupes, le contenu
+  arrive dès qu'un élève de cette classe a pairé son compte.
+- **Collision de déduplication corrigée** : la clé des cours (date+heure+
+  matière+professeur) et des devoirs (date+matière+description) ne
+  contenait pas la classe — deux classes avec le même prof/matière au
+  même créneau (plausible dans un vrai emploi du temps) auraient vu leurs
+  cours fusionnés à tort. La clé cours utilise maintenant `date` +
+  `heure_debut` stockées plutôt que l'isoformat complet de pronotepy — un
+  changement qui, en plus de régler la collision, rend la clé
+  reconstructible depuis les seules colonnes stockées (nécessaire pour la
+  migration des lignes déjà en base sans avoir à resynchroniser).
+- **`classes`** (table) remplace l'ancien paramètre `classe_attendue` à
+  valeur unique — une vraie liste gérable (Paramétrage → Pronote), avec
+  migration automatique au démarrage qui reprend l'ancien réglage pour
+  amorcer la liste et retagger les lignes déjà en base.
+- **Filtre par classe** sur tous les endpoints de lecture de contenu : un
+  élève voit toujours SA classe (jamais un paramètre de requête), un
+  admin voit les deux classes mélangées par défaut ou une classe précise
+  via un sélecteur (rangée d'onglets sur Accueil/Matières/Élèves,
+  toujours visible même avec une seule classe — retour de terrain après
+  un premier essai en menu déroulant, moins visible). `GET /api/cours/
+  {id}` et les téléchargements de documents vérifient en plus
+  l'appartenance à la classe (403 sinon), pour empêcher d'ouvrir le
+  contenu d'une autre classe en devinant un id.
+- **Élèves** : deuxième rangée d'onglets pour filtrer par groupe (LV2,
+  options) une fois une classe sélectionnée, construite à partir des
+  groupes réellement constatés chez les élèves de cette classe.
+
+### Matières à exclure (redesign)
+
+L'ancien mécanisme (liste de noms tapés à l'avance, comparés par slug pour
+NE PAS importer certains créneaux au sync) avait deux défauts : il fallait
+deviner le nom exact avant même que Pronote ne l'ait renvoyé, et il ne
+nettoyait jamais rétroactivement ce qui était déjà en base avant
+l'exclusion (d'où l'existence, maintenant supprimée, d'un script
+`nettoyer_matieres_exclues.py` qui supprimait physiquement les données
+correspondantes). Remplacé par une case à cocher par matière **déjà
+récupérée** (`matieres.exclue`, Paramétrage → Pronote) : la synchro
+ingère désormais tout sans exception, l'exclusion masque seulement
+l'affichage (accueil, matières, devoirs, quiz du jour, cours à générer).
+Migration automatique une seule fois au démarrage (marqueur en base,
+`_migrer_matieres_exclues_defaut`) pour reprendre l'ancien réglage texte —
+volontairement une seule fois : sans ce garde-fou, un décochage manuel
+plus tard serait défait à chaque redémarrage tant que l'ancien réglage
+reste en base.
+
+### Tests automatisés
+
+Première suite de tests persistée dans le dépôt (`BackEnd/tests/`,
+pytest — jusque-là, toute vérification se faisait par scripts jetables
+dans un répertoire temporaire, jamais commités). Isolation par
+`monkeypatch` de `Services.db.DB_PATH`/`Services.crypto_secrets.
+CREDENTIALS_ENCRYPTION_KEY` plutôt qu'un process séparé par test : ces
+constantes sont des noms de module résolus à l'appel (pas figés à
+l'import), donc `monkeypatch.setattr` les redirige correctement sans
+sous-processus ni fichiers `.env` de test. Voir `BackEnd/tests/
+conftest.py` pour le détail des fixtures, `BackEnd/README.md` section
+"Tests" pour la commande.
+
 ## État — pas commencé
 
-- ~~**Exposition hors LAN**~~ — en cours (2026-09-12) : domaine
-  `ghostschool.app` acheté et pointé vers l'IP publique, port 80 redirigé
-  vers l'OptiPlex, site déjà joignable en HTTP. Reste à faire : rediriger
-  aussi le port 443 et mettre en place Caddy (voir
-  `Services/README.md`, section "Exposer le site hors du réseau local",
-  et `BackEnd/deploy/Caddyfile`) avant que d'autres élèves ne s'y
-  connectent depuis chez eux — le PIN/QR Pronote et les cookies de
-  session circulent en clair tant que ce n'est pas fait.
+- ~~**Exposition hors LAN**~~ — fait (2026-09-12) : domaine
+  `ghostschool.app`, HTTPS via Caddy/Let's Encrypt, `SESSION_COOKIE_SECURE
+  =true`. Voir section "État — fonctionnel et testé" ci-dessus et
+  `Services/README.md`, section "Exposer le site hors du réseau local".
 - Export flashcards compatible Anki (mentionné dans le cahier des charges
   d'origine, jamais abordé).
 - Espace enseignant (explicitement hors scope v1 dans le cahier des
@@ -533,6 +749,39 @@ déprécié.
   `grep -n -P '[\x80-\xFF]' BackEnd/.env`, puis reconvertir tout le
   fichier : `iconv -f WINDOWS-1252 -t UTF-8 BackEnd/.env -o /tmp/env.utf8
   && mv /tmp/env.utf8 BackEnd/.env`.
+- `ClientInfo.id` (pronotepy, exposé comme `pronote_id` côté Ghost
+  School) supposé à tort stable pour un même élève réel — c'est un id de
+  ressource interne à la session, régénéré à chaque nouveau pairage (ex.
+  après déconnexion de l'appli Pronote côté téléphone). Provoquait une
+  deuxième ligne `eleves` (doublon) à chaque re-pairage. Corrigé :
+  `upsert_eleve_pronote` matche par nom normalisé plutôt que par
+  `pronote_id`, et `_fusionner_eleves_dupliques` (appelée depuis
+  `init_db()`) fusionne au démarrage les doublons déjà en base — groupée
+  par `(nom, classe)` depuis le multi-classe, pour ne jamais fusionner un
+  homonyme de deux classes différentes.
+- **Trouvé en écrivant `BackEnd/tests/test_pairage.py`** (le premier essai
+  du test faisait apparaître un doublon là où le test s'attendait à une
+  mise à jour) : `upsert_eleve_pronote` comparait les noms via
+  `lower(trim(nom))` **côté SQL** — `lower()` de SQLite est ASCII
+  uniquement, donc un nom avec une majuscule accentuée (ex. "Éléonore") ne
+  se matchait jamais avec lui-même d'un pairage à l'autre, créant
+  exactement le doublon que la correction ci-dessus visait à éliminer. En
+  plus, cette comparaison ne tenait pas compte de la classe (contrairement
+  à `_fusionner_eleves_dupliques`), donc un homonyme entre 2F et 2E aurait
+  pu faire écraser la ligne de l'un par le pairage de l'autre. Corrigé en
+  comparant nom ET classe en Python (`.strip().lower()`, qui replie
+  correctement l'unicode) plutôt qu'en SQL.
+- Détection du QR Pronote (`cv2.QRCodeDetector`) fiable sur un JSON généré
+  en sandbox mais en échec sur de vraies photos de téléphone (moiré/reflet
+  d'écran selon la résolution native). Corrigé par `_decoder_qr_image`
+  (`BackEnd/app/main.py`) qui réessaie plusieurs tailles de
+  redimensionnement avant d'abandonner, plus un recadrage manuel côté
+  frontend (`CropQr.jsx`) avant l'envoi.
+- Caddy refusait de démarrer (`bind: address already in use`) sur le port
+  443 : déjà occupé par `tailscale serve`, actif sur l'interface Tailscale
+  pour un usage sans rapport. Corrigé en restreignant Caddy à l'IP réseau
+  locale précise de l'OptiPlex (directive `bind` du Caddyfile), sans
+  toucher à la configuration Tailscale existante.
 
 ## Conventions établies pendant la session
 
@@ -550,29 +799,43 @@ déprécié.
 - Secrets déjà partagés en clair dans la conversation (token Pronote,
   token bot Telegram) ont été signalés comme à régénérer plutôt que
   réutilisés tels quels.
+- Le numéro de version (`FrontEnd/package.json`, champ `version`, source
+  de vérité unique — injecté au build par `vite.config.js`) et une
+  nouvelle entrée `CHANGELOG.md` sont incrémentés à chaque publication
+  réelle sur l'OptiPlex (pas à chaque commit) — sert à recouper un bug
+  signalé avec la version effectivement déployée à ce moment-là. Une
+  demande d'ajustement mineur d'une fonctionnalité déjà livrée est
+  intégrée dans la version en cours ("0.5.1" par ex.) plutôt que de
+  déclencher un nouveau numéro mineur ; un chantier structurant nouveau
+  (multi-classe, pairage Pronote) mérite son propre numéro mineur, décidé
+  en amont en mode plan.
 
 ## Pour repartir tout de suite
 
-L'OCR (voir section "État — fonctionnel et testé" ci-dessus) est
-implémenté et vérifié en sandbox, mais **pas encore déployé ni testé sur
-l'OptiPlex**. Avant de l'utiliser en vrai :
-1. `git pull` sur l'OptiPlex (le dépôt est maintenant sur
-   `github.com/Back2CodeLabs/GhostCards` — voir section Versioning).
-2. **Recréer le venv en Python 3.13** (voir "Prérequis" ci-dessus) — le
-   venv actuel est en Python 3.14, incompatible avec `paddlepaddle`.
-3. Dans le nouveau venv : `pip install -r requirements.txt` (inclut
-   maintenant `python-multipart`, `paddlepaddle`, `paddleocr`).
-4. Redémarrer `ghostcards.service` — `init_db()` applique les migrations
-   automatiquement au démarrage.
-5. Définir `ADMIN_PASSWORD` dans `.env`, puis se connecter en admin via
-   le bouton bouclier dans l'en-tête du site (indépendant des comptes
-   élèves Google — voir section Authentification admin ci-dessus).
-6. Tester avec un vrai PDF Pronote scanné et une vraie photo de cahier,
-   en vérifiant l'écran "Traitements" (nav admin) pour voir le résultat
-   réel de l'OCR PaddleOCR — pas juste le chemin heureux simulé en
-   sandbox. Si la qualité déçoit sur du manuscrit, basculer
-   `OCR_ENGINE=claude` dans `.env` et relancer les traitements en échec.
+Tout ce qui suit est déployé et fonctionnel sur l'OptiPlex à la date du
+13 septembre 2026 : pairage Pronote par élève (plus de connexion
+Google), OCR PaddleOCR, génération IA multi-moteur, HTTPS sur
+`ghostschool.app`, et le support de plusieurs classes (2F, 2E). Pour
+reprendre le travail :
 
-Prochain chantier logique une fois l'OCR validé en réel : la génération IA
-(résumés/flashcards/quiz via Ollama, `Services/ia_generation.py` —
-section "État — pas commencé").
+1. `git pull` sur l'OptiPlex (`github.com/Back2CodeLabs/GhostCards`,
+   branche utilisée pour les déploiements — voir la section Versioning
+   plus haut).
+2. Réinstaller les dépendances si `requirements.txt` a changé depuis le
+   dernier déploiement (`pip install -r requirements.txt` dans le venv
+   existant) — voir "Bugs déjà rencontrés" pour le piège classique
+   `ModuleNotFoundError` si cette étape est oubliée.
+3. Si le frontend a changé : `cd FrontEnd && npm install && npm run
+   build`.
+4. Redémarrer `ghostcards.service` (`sudo systemctl restart
+   ghostcards`) — `init_db()` applique automatiquement toute nouvelle
+   migration de schéma au démarrage, rien à faire à la main sur la base.
+5. Vérifier l'écran admin "Traitements" après un premier cycle de sync
+   pour confirmer qu'il n'y a pas d'erreur nouvelle (compte Pronote
+   cassé, rate-limit), et l'écran "Paramétrage" pour confirmer que la
+   liste des classes et les clés IA sont toujours celles attendues.
+
+Prochain chantier envisagé : la version 0.6.0 (génération manuelle hors
+Ghost School par l'élève, avec sa propre IA, puis import du résultat —
+voir "État — pas commencé" ci-dessus). Pas encore cadré en détail au
+13 septembre 2026.
