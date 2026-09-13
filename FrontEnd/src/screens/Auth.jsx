@@ -30,6 +30,11 @@ export function LoginScreen({ me, onBack }) {
     setError(null);
     try {
       await me.pairerPronote(mode === "photo" ? fichier : qrJsonTexte.trim(), pin, consentement);
+      // Sans ça, l'écran de pairage restait affiché après une connexion
+      // réussie (il reste au sommet de la pile de navigation) : on la
+      // dépile pour retomber sur l'accueil, comme AdminLoginScreen le
+      // fait déjà après un mot de passe admin correct.
+      onBack?.();
     } catch (e) {
       setError(messageErreur(e, "Pairage Pronote impossible."));
     } finally {

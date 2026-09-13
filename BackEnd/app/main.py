@@ -258,8 +258,22 @@ async def pairer_eleve_pronote(
 
     try:
         client = pronotepy.Client.qrcode_login(qr_code, pin, str(uuid.uuid4()))
+    except pronotepy.QRCodeDecryptError:
+        # Le PIN sert de clé de déchiffrement du QR (pas une simple
+        # vérification a posteriori) : un PIN faux ne donne jamais un
+        # message Pronote clair ("invalid confirmation code", en anglais,
+        # remonté tel quel avant cette correction) — message dédié.
+        raise HTTPException(
+            401,
+            "Code PIN incorrect, ou QR code trop ancien — régénère-le sur Pronote (Mon compte → "
+            "Connexion via smartphone) et réessaie.",
+        )
     except Exception as e:
-        raise HTTPException(401, f"Connexion Pronote refusée : {e}")
+        log.warning("Échec pairage Pronote (avant connexion) : %s", e, exc_info=True)
+        raise HTTPException(
+            401,
+            "Connexion Pronote refusée — vérifie le QR code et le PIN, ou régénère-les sur Pronote si ça persiste.",
+        )
     if not client.logged_in:
         raise HTTPException(401, "Connexion Pronote refusée (QR code expiré ou code PIN incorrect).")
 
@@ -271,15 +285,27 @@ async def pairer_eleve_pronote(
             f"(attendu : « {classe_attendue} »).",
         )
 
-    credentials_chiffrees = crypto_secrets.chiffrer_json(client.export_credentials())
-    with db.session() as conn:
-        eleve_id = db.upsert_eleve_pronote(
-            conn,
-            pronote_id=client.info.id,
-            nom=client.info.name,
-            email=getattr(client.info, "email", "") or "",
-            class_name=class_name,
-            credentials_chiffrees=credentials_chiffrees,
+    # Connexion Pronote réussie à ce stade : une panne ici (clé de
+    # chiffrement absente, base injoignable...) ne doit pas remonter une
+    # erreur 500 brute et muette à l'élève — message clair côté client,
+    # détail complet dans les logs pour diagnostic côté admin.
+    try:
+        credentials_chiffrees = crypto_secrets.chiffrer_json(client.export_credentials())
+        with db.session() as conn:
+            eleve_id = db.upsert_eleve_pronote(
+                conn,
+                pronote_id=client.info.id,
+                nom=client.info.name,
+                email=getattr(client.info, "email", "") or "",
+                class_name=class_name,
+                credentials_chiffrees=credentials_chiffrees,
+            )
+    except Exception as e:
+        log.error("Échec enregistrement après pairage Pronote réussi : %s", e, exc_info=True)
+        raise HTTPException(
+            500,
+            "Connexion Pronote réussie, mais l'enregistrement a échoué côté serveur — réessaie, "
+            "et préviens l'admin si ça persiste.",
         )
     request.session["eleve_id"] = eleve_id
     return {"ok": True, "nom": client.info.name}
