@@ -16,6 +16,14 @@ export function ElevesScreen() {
   const [togglingId, setTogglingId] = useState(null);
   const [reinitId, setReinitId] = useState(null);
   const [reinitError, setReinitError] = useState(null);
+  const [filtreClasse, setFiltreClasse] = useState(null);
+
+  // Filtre par classe côté client : la liste est déjà entièrement chargée
+  // (36-72 élèves), pas la peine d'un aller-retour serveur pour ça.
+  const classesPresentes = [...new Set((eleves.data || []).map((e) => e.pronote_class_name).filter(Boolean))].sort();
+  const elevesAffiches = filtreClasse
+    ? (eleves.data || []).filter((e) => e.pronote_class_name === filtreClasse)
+    : eleves.data;
 
   async function toggleAssistant(eleve) {
     setTogglingId(eleve.id);
@@ -58,13 +66,33 @@ export function ElevesScreen() {
         </p>
         {reinitError && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "8px 0 0" }}>{reinitError}</p>}
       </div>
+      {classesPresentes.length > 1 && (
+        <div style={{ display: "flex", gap: 8, padding: "0 20px 12px", flexWrap: "wrap" }}>
+          {[null, ...classesPresentes].map((c) => {
+            const actif = filtreClasse === c;
+            return (
+              <button
+                key={c || "toutes"}
+                onClick={() => setFiltreClasse(c)}
+                style={{
+                  background: actif ? C.hauntSoft : C.white, border: `1px solid ${actif ? C.haunt : C.line}`,
+                  color: actif ? C.haunt : C.inkSoft, borderRadius: 999, padding: "6px 14px",
+                  fontFamily: uiFont, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+                }}
+              >
+                {c || "Toutes"}
+              </button>
+            );
+          })}
+        </div>
+      )}
       <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
         {eleves.loading && <Loading />}
         {eleves.error && <ApiError message={eleves.error} onRetry={eleves.reload} />}
         {eleves.data && eleves.data.length === 0 && (
           <EmptyState text="Aucun élève connecté pour l'instant." icon={Users} />
         )}
-        {eleves.data?.map((e) => (
+        {elevesAffiches?.map((e) => (
           <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 12, background: C.white, border: `1px solid ${C.line}`, borderRadius: 10, padding: "12px 14px" }}>
             {e.avatar_url ? (
               <img src={e.avatar_url} alt="" style={{ width: 32, height: 32, borderRadius: "50%" }} referrerPolicy="no-referrer" />

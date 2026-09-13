@@ -29,6 +29,104 @@ const MOTEURS_VERIF = [
   { id: "ollama", nom: "Ollama (local, gratuit)", desc: "Peut être le même serveur que la génération, ou un autre modèle installé dessus — mais vérifier avec le modèle qui a généré perd l'intérêt du regard croisé." },
 ];
 
+// Gestion des classes autorisées au pairage (remplace l'ancien champ texte
+// unique "classe attendue") — actions immédiates (ajout/suppression), pas
+// intégrées au formulaire global "Enregistrer" ci-dessous, même esprit que
+// les actions par ligne de ElevesScreen.
+function ClassesManager({ C, labelStyle, inputStyle }) {
+  const classes = useApi("/api/classes");
+  const [nouvelleClasse, setNouvelleClasse] = useState("");
+  const [ajoutEnCours, setAjoutEnCours] = useState(false);
+  const [suppressionId, setSuppressionId] = useState(null);
+  const [erreur, setErreur] = useState(null);
+
+  async function ajouter() {
+    const nom = nouvelleClasse.trim();
+    if (!nom || ajoutEnCours) return;
+    setAjoutEnCours(true);
+    setErreur(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/classes`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ nom }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Erreur ${res.status}`);
+      }
+      setNouvelleClasse("");
+      classes.reload();
+    } catch (e) {
+      setErreur(messageErreur(e, "Impossible d'ajouter cette classe."));
+    } finally {
+      setAjoutEnCours(false);
+    }
+  }
+
+  async function supprimer(c) {
+    setSuppressionId(c.id);
+    setErreur(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/classes/${c.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Erreur ${res.status}`);
+      }
+      classes.reload();
+    } catch (e) {
+      setErreur(messageErreur(e, "Impossible de supprimer cette classe."));
+    } finally {
+      setSuppressionId(null);
+    }
+  }
+
+  return (
+    <div>
+      <label style={labelStyle}>CLASSES AUTORISÉES</label>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+        {classes.data?.map((c) => (
+          <div key={c.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: C.paperDim, border: `1px solid ${C.line}`, borderRadius: 8, padding: "7px 10px" }}>
+            <span style={{ fontFamily: uiFont, fontSize: 13, color: C.ink, fontWeight: 600 }}>{c.nom}</span>
+            <button
+              onClick={() => supprimer(c)}
+              disabled={suppressionId === c.id}
+              style={{ background: "transparent", border: "none", color: C.brick, fontFamily: uiFont, fontSize: 12, fontWeight: 600, cursor: suppressionId === c.id ? "default" : "pointer" }}
+            >
+              Retirer
+            </button>
+          </div>
+        ))}
+        {classes.data && classes.data.length === 0 && (
+          <p style={{ fontFamily: uiFont, fontSize: 12.5, color: C.inkFaint, margin: 0 }}>
+            Aucune classe enregistrée — le pairage est ouvert à n'importe quelle classe de l'établissement.
+          </p>
+        )}
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input
+          value={nouvelleClasse}
+          onChange={(e) => setNouvelleClasse(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && ajouter()}
+          placeholder="Ex. 2E"
+          style={{ ...inputStyle, flex: 1 }}
+        />
+        <button
+          onClick={ajouter}
+          disabled={ajoutEnCours || !nouvelleClasse.trim()}
+          style={{ background: C.haunt, color: C.onAccent, border: "none", borderRadius: 8, padding: "0 16px", fontFamily: uiFont, fontSize: 13, fontWeight: 700, cursor: nouvelleClasse.trim() ? "pointer" : "default" }}
+        >
+          Ajouter
+        </button>
+      </div>
+      {erreur && <p style={{ fontFamily: uiFont, fontSize: 12, color: C.brick, margin: "6px 0 0" }}>{erreur}</p>}
+      <p style={{ fontFamily: uiFont, fontSize: 11.5, color: C.inkFaint, margin: "8px 0 0" }}>
+        Vérifiées au pairage Pronote d'un élève (voir <code>ClientInfo.class_name</code>) — un élève
+        d'une classe absente de cette liste ne peut pas se connecter à Ghost School. Liste vide = aucune
+        vérification (seul l'établissement compte). Impossible de supprimer la dernière classe restante.
+      </p>
+    </div>
+  );
+}
+
 function formatDateHeure(iso) {
   const d = new Date(iso);
   return `${d.toLocaleDateString("fr-FR")} à ${d.toLocaleTimeString("fr-FR")}`;
@@ -85,7 +183,6 @@ export function ParametresScreen() {
   const [syncDaysBack, setSyncDaysBack] = useState("");
   const [syncDaysForward, setSyncDaysForward] = useState("");
   const [matieresExclues, setMatieresExclues] = useState("");
-  const [classeAttendue, setClasseAttendue] = useState("");
   const [ocrEngine, setOcrEngine] = useState("paddleocr");
   const [paddleocrEnableMkldnn, setPaddleocrEnableMkldnn] = useState(false);
   const [verifMoteur, setVerifMoteur] = useState("claude");
@@ -113,7 +210,6 @@ export function ParametresScreen() {
       setSyncDaysBack(String(parametres.data.sync_days_back ?? ""));
       setSyncDaysForward(String(parametres.data.sync_days_forward ?? ""));
       setMatieresExclues(parametres.data.matieres_exclues || "");
-      setClasseAttendue(parametres.data.classe_attendue || "");
       setOcrEngine(parametres.data.ocr_engine || "paddleocr");
       setPaddleocrEnableMkldnn(parametres.data.paddleocr_enable_mkldnn ?? false);
       setVerifMoteur(parametres.data.verif_moteur || "claude");
@@ -172,7 +268,6 @@ export function ParametresScreen() {
         sync_days_back: syncDaysBack.trim() ? parseInt(syncDaysBack, 10) : null,
         sync_days_forward: syncDaysForward.trim() ? parseInt(syncDaysForward, 10) : null,
         matieres_exclues: matieresExclues,
-        classe_attendue: classeAttendue,
         ocr_engine: ocrEngine,
         paddleocr_enable_mkldnn: paddleocrEnableMkldnn,
         verif_moteur: verifMoteur,
@@ -308,20 +403,7 @@ export function ParametresScreen() {
                   spéciales...) — ceux listés ici ne seront plus importés à la prochaine synchronisation.
                 </p>
               </div>
-              <div>
-                <label style={labelStyle}>CLASSE ATTENDUE</label>
-                <input
-                  value={classeAttendue}
-                  onChange={(e) => setClasseAttendue(e.target.value)}
-                  placeholder="2F"
-                  style={inputStyle}
-                />
-                <p style={{ fontFamily: uiFont, fontSize: 11.5, color: C.inkFaint, margin: "4px 0 0" }}>
-                  Vérifiée au pairage Pronote d'un élève (voir <code>ClientInfo.class_name</code>) — un
-                  élève d'une autre classe ne peut pas se connecter à Ghost School. Vide = aucune
-                  vérification (seul l'établissement compte).
-                </p>
-              </div>
+              <ClassesManager C={C} labelStyle={labelStyle} inputStyle={inputStyle} />
             </div>
           </div>
         )}

@@ -169,7 +169,7 @@ export function LoginScreen({ me, onBack }) {
             <li>Emploi du temps (matière, horaire, salle, groupe, prof, mémo) et contenu des cours — <b>partagé avec la classe</b>.</li>
             <li>Devoirs et documents attachés — <b>partagé avec la classe</b>.</li>
             <li>Tes notes et moyennes — <b>gardées privées</b>, jamais visibles par un camarade.</li>
-            <li>Ton nom et ta classe, pour vérifier que tu es bien en 2F.</li>
+            <li>Ton nom et ta classe, pour vérifier que tu es bien dans une classe autorisée.</li>
           </ul>
           <p style={{ fontFamily: uiFont, fontSize: 11.5, color: C.inkFaint, margin: "0 0 10px" }}>
             Rien d'autre : ni absences, ni retards, ni sanctions, ni actualités de l'établissement.
