@@ -5,7 +5,15 @@ Numéro de version affiché dans l'app (voir `FrontEnd/package.json`, injecté
 via `vite.config.js`) — à incrémenter à chaque publication sur l'OptiPlex,
 avec une nouvelle entrée ici.
 
-## [0.4.1] — en cours
+## [0.4.2] — en cours
+
+### Fixed
+- `og-image.png` (aperçu de lien) : les lettres fantômes de "Ghost School"
+  rendaient dans les mauvaises couleurs (gris/blanc au lieu du rose de
+  l'en-tête) et le fantôme dessiné à la main avait des jointures visibles
+  — remplacé par le vrai emoji fantôme, couleurs alignées sur l'en-tête.
+
+## [0.4.1] — 2026-09-13
 
 ### Added
 - Aperçu de lien (Open Graph/Twitter) au partage de l'URL ghostschool.app —
