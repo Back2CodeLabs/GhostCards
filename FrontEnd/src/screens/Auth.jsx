@@ -11,7 +11,7 @@ import { ScreenHeader } from "../components/Shared";
 /* pronote). Verrouille tout le site : plus de consultation sans compte.*/
 /* ------------------------------------------------------------------ */
 
-export function LoginScreen({ me }) {
+export function LoginScreen({ me, onBack }) {
   const { C } = useTheme();
   const [mode, setMode] = useState("photo"); // "photo" | "json" — voir le lien "Coller le code à la place"
   const [fichier, setFichier] = useState(null);
@@ -39,7 +39,7 @@ export function LoginScreen({ me }) {
 
   return (
     <div>
-      <ScreenHeader title="Connexion" />
+      <ScreenHeader title="Connexion" onBack={onBack} />
       <div style={{ padding: "40px 28px", textAlign: "center" }}>
         <Ghost size={38} color={C.haunt} strokeWidth={1.4} style={{ marginBottom: 16, ...glowText(C, C.haunt) }} />
         <h2 style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 20, color: C.ink, margin: "0 0 10px" }}>

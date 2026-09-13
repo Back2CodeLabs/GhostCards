@@ -5,6 +5,16 @@ import { useTheme, uiFont } from "../theme";
 /* Petits composants partagés                                          */
 /* ------------------------------------------------------------------ */
 
+// Pronote renvoie le nom sous la forme "NOM Prénom" (nom de famille en
+// majuscules) — on isole le(s) mot(s) contenant une minuscule pour en tirer
+// un prénom à afficher dans les messages d'accueil, plutôt que le nom complet.
+export function prenomDe(nomComplet) {
+  if (!nomComplet) return "";
+  const mots = nomComplet.trim().split(/\s+/);
+  const prenom = mots.filter((m) => /[a-zà-ÿ]/.test(m)).join(" ");
+  return prenom || mots[mots.length - 1] || "";
+}
+
 export function ScreenHeader({ title, onBack, right }) {
   const { C } = useTheme();
   return (

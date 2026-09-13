@@ -16,6 +16,7 @@ import { ParametresScreen } from "./screens/ParametresScreen";
 import { SearchScreen } from "./screens/SearchScreen";
 import { AssistantScreen } from "./screens/AssistantScreen";
 import { LoginScreen, AdminLoginScreen } from "./screens/Auth";
+import { LandingScreen } from "./screens/Landing";
 
 /* ------------------------------------------------------------------ */
 /* App                                                                  */
@@ -69,23 +70,27 @@ export default function App() {
   const top = stack[stack.length - 1];
 
   let content;
-  if (!me.loading && !estConnecte && top?.screen !== "admin-login") {
+  if (top?.screen === "admin-login") {
+    // Toujours joignable, même non connecté — l'accès admin (mot de passe,
+    // bouton bouclier dans l'en-tête) est indépendant du pairage élève.
+    content = <AdminLoginScreen onBack={pop} me={me} />;
+  } else if (!me.loading && !estConnecte) {
     // Site verrouillé aux élèves pairés (Pronote) et à l'admin — voir
-    // BackEnd/app/main.py::_require_session. L'accès admin (mot de passe,
-    // bouton bouclier dans l'en-tête) reste joignable même non connecté.
-    content = <LoginScreen me={me} />;
+    // BackEnd/app/main.py::_require_session. Une vraie page d'accueil sert
+    // de point d'entrée plutôt que de forcer le formulaire de pairage :
+    // celui-ci ne s'affiche que sur clic (bouton "Se connecter", ici ou
+    // dans l'en-tête).
+    content = top?.screen === "login" ? <LoginScreen me={me} onBack={pop} /> : <LandingScreen onLogin={requireLogin} />;
   } else if (top?.screen === "subject") {
     content = <SubjectDetail subjectId={top.params.id} subjectName={top.params.nom} onBack={pop} onOpenCours={openCours} />;
   } else if (top?.screen === "cours") {
     content = <CoursDetail coursId={top.params.id} onBack={pop} me={me} onRequireLogin={requireLogin} onOpenTraitement={openTraitement} />;
   } else if (top?.screen === "login") {
-    content = <LoginScreen onBack={pop} />;
-  } else if (top?.screen === "admin-login") {
-    content = <AdminLoginScreen onBack={pop} me={me} />;
+    content = <LoginScreen me={me} onBack={pop} />;
   } else if (top?.screen === "traitement") {
     content = <TraitementDetail traitementId={top.params.id} onBack={pop} onOpenCours={openCours} />;
   } else if (tab === "home") {
-    content = <HomeScreen onOpenSubject={openSubject} onOpenCours={openCours} />;
+    content = <HomeScreen me={me} onOpenSubject={openSubject} onOpenCours={openCours} />;
   } else if (tab === "subjects") {
     content = <SubjectsScreen onOpenSubject={openSubject} />;
   } else if (tab === "search") {

@@ -2,18 +2,19 @@ import { useState } from "react";
 import { ChevronRight, RefreshCw } from "lucide-react";
 import { useTheme, uiFont } from "../theme";
 import { API_BASE, useApi } from "../api";
-import { Loading, ApiError, EmptyState, SectionLabel, Divider, IndicateursCours } from "../components/Shared";
+import { Loading, ApiError, EmptyState, SectionLabel, Divider, IndicateursCours, prenomDe } from "../components/Shared";
 
 /* ------------------------------------------------------------------ */
 /* Accueil                                                              */
 /* ------------------------------------------------------------------ */
 
-export function HomeScreen({ onOpenSubject, onOpenCours }) {
+export function HomeScreen({ me, onOpenSubject, onOpenCours }) {
   const { C, colorFor } = useTheme();
   const matieres = useApi("/api/matieres");
   const recents = useApi("/api/cours/recents?limit=5");
   const devoirs = useApi("/api/devoirs");
   const [syncing, setSyncing] = useState(false);
+  const prenom = me?.isAdmin ? "Maître Fantôme" : prenomDe(me?.eleve?.nom);
 
   async function refresh() {
     setSyncing(true);
@@ -34,7 +35,9 @@ export function HomeScreen({ onOpenSubject, onOpenCours }) {
     <div style={{ paddingBottom: 24 }}>
       <div className="flex items-center justify-between" style={{ padding: "22px 20px 6px" }}>
         <div>
-          <h1 style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 26, color: C.ink, margin: 0 }}>Bonjour 👋</h1>
+          <h1 style={{ fontFamily: C.fontHeading, letterSpacing: C.headingLetterSpacing, fontSize: 26, color: C.ink, margin: 0 }}>
+            Bonjour{prenom ? ` ${prenom}` : ""} 👋
+          </h1>
         </div>
         <button
           onClick={refresh}
