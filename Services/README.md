@@ -221,7 +221,7 @@ appareil, pas à chaque visite. Le QR n'est valable que ~10 minutes.
 ```
 CREDENTIALS_ENCRYPTION_KEY=   # génère avec : python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 SESSION_SECRET_KEY=           # génère avec : python3 -c "import secrets; print(secrets.token_hex(32))"
-CLASSE_ATTENDUE=2F            # valeur de départ — modifiable à chaud depuis Paramétrage → Pronote
+CLASSE_ATTENDUE=2F            # valeur de départ pour la 1re classe autorisée — gérée ensuite comme une liste depuis Paramétrage → Pronote
 ```
 
 `CREDENTIALS_ENCRYPTION_KEY` chiffre les jetons Pronote stockés par élève
@@ -236,8 +236,13 @@ avec une erreur claire plutôt que de stocker les jetons en clair.
   correspondre à `pronote_url` (Paramétrage → Pronote) — vérifié *avant*
   même de tenter la connexion.
 - **Classe** : une fois connecté, `client.info.class_name` (Pronote) doit
-  correspondre à `classe_attendue` (Paramétrage → Pronote, section
-  "Classe attendue") — laisse vide pour ne pas vérifier la classe.
+  figurer dans les classes autorisées (Paramétrage → Pronote, section
+  "Classes autorisées" — une vraie liste gérable, plusieurs classes
+  possibles sur la même instance, ex. 2F et 2E) — liste vide = pas de
+  vérification. Chaque cours/devoir synchronisé est rattaché à la classe
+  de l'élève (ou du compte de référence) qui l'a récupéré — un élève ne
+  voit jamais le contenu d'une autre classe (voir `_classe_filtre`,
+  `BackEnd/app/main.py`).
 
 ### Admin : gérer les comptes élèves
 
