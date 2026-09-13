@@ -232,7 +232,11 @@ export function CoursDetail({ coursId, onBack, me, onRequireLogin, onOpenTraitem
   if (cours.error) return (<div><ScreenHeader title="Cours" onBack={onBack} /><ApiError message={cours.error} onRetry={cours.reload} /></div>);
 
   const c = cours.data;
-  const sansContenu = c.documents.length === 0 && c.notes.length === 0;
+  // Une description Pronote (sans document ni note) suffit déjà à générer
+  // côté serveur (voir Services/ia_generation.py::_texte_source) — un cours
+  // sans document/note mais avec une vraie description ne doit donc pas
+  // être traité comme "sans contenu" (bouton "Générer" masqué à tort).
+  const sansContenu = !c.description?.trim() && c.documents.length === 0 && c.notes.length === 0;
   // La section IA (résultat ou invite à générer) ne s'affiche pas quand il
   // n'y a rien à partir de quoi générer (voir plus bas) — l'avertissement
   // ne doit apparaître que si cette section, elle, s'affiche.
