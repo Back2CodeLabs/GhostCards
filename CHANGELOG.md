@@ -5,7 +5,21 @@ Numéro de version affiché dans l'app (voir `FrontEnd/package.json`, injecté
 via `vite.config.js`) — à incrémenter à chaque publication sur l'OptiPlex,
 avec une nouvelle entrée ici.
 
-## [0.3.5] — en cours
+## [0.3.6] — en cours
+
+### Fixed
+- Pairage Pronote : après une connexion réussie, l'écran de pairage restait
+  affiché au lieu de retomber sur l'accueil (il n'était jamais dépilé de
+  la navigation) — corrigé, comme pour la connexion admin.
+- Message d'erreur PIN incorrect peu clair : une réponse d'erreur brute de
+  pronotepy ("invalid confirmation code", en anglais) remontait telle
+  quelle. Message dédié en français, avec l'action à faire (régénérer le
+  QR code).
+- Une panne après une connexion Pronote réussie (chiffrement, base de
+  données) remontait une erreur 500 muette — message clair côté élève
+  désormais, détail complet conservé dans les logs serveur pour diagnostic.
+
+## [0.3.5] — 2026-09-13
 
 ### Added
 - Vraie page d'accueil (pitch + bouton "Se connecter") pour un visiteur non
