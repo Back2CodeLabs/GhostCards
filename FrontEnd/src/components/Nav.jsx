@@ -1,4 +1,4 @@
-import { Home, BookOpen, Search as SearchIcon, MessageCircle, ListChecks, Users, Settings, ShieldCheck, LogIn, LogOut } from "lucide-react";
+import { Home, BookOpen, Search as SearchIcon, MessageCircle, ListChecks, Users, Settings, ShieldCheck, LogIn, LogOut, UserCircle } from "lucide-react";
 import { useTheme, uiFont, glowText } from "../theme";
 
 /* ------------------------------------------------------------------ */
@@ -79,7 +79,7 @@ export function AuthControl({ me, onLogin }) {
 /* (voir index.css, règle @media (min-width: 860px))                   */
 /* ------------------------------------------------------------------ */
 
-export function Nav({ tab, setTab, isAdmin }) {
+export function Nav({ tab, setTab, isAdmin, isEleve }) {
   const { C } = useTheme();
   const items = [
     { id: "home", label: "Accueil", icon: Home },
@@ -87,6 +87,9 @@ export function Nav({ tab, setTab, isAdmin }) {
     { id: "search", label: "Recherche", icon: SearchIcon },
     { id: "assistant", label: "Assistant", icon: MessageCircle },
   ];
+  if (isEleve) {
+    items.push({ id: "profil", label: "Profil", icon: UserCircle });
+  }
   if (isAdmin) {
     items.push({ id: "eleves", label: "Élèves", icon: Users });
     items.push({ id: "traitements", label: "Traitements", icon: ListChecks });

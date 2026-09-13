@@ -17,6 +17,7 @@ import { SearchScreen } from "./screens/SearchScreen";
 import { AssistantScreen } from "./screens/AssistantScreen";
 import { LoginScreen, AdminLoginScreen } from "./screens/Auth";
 import { LandingScreen } from "./screens/Landing";
+import { ProfilScreen } from "./screens/ProfilScreen";
 
 /* ------------------------------------------------------------------ */
 /* App                                                                  */
@@ -42,7 +43,8 @@ export default function App() {
   // que de laisser un onglet actif introuvable et un écran vide.
   useEffect(() => {
     if ((tab === "traitements" || tab === "eleves" || tab === "parametres") && !me.isAdmin) setTab("home");
-  }, [tab, me.isAdmin]);
+    if (tab === "profil" && !me.eleve) setTab("home");
+  }, [tab, me.isAdmin, me.eleve]);
   function push(screen, params) {
     setStack((s) => [...s, { screen, params }]);
   }
@@ -97,6 +99,8 @@ export default function App() {
     content = <SearchScreen onOpenSubject={openSubject} onOpenCours={openCours} />;
   } else if (tab === "assistant") {
     content = <AssistantScreen me={me} onRequireLogin={requireLogin} />;
+  } else if (tab === "profil" && me.eleve) {
+    content = <ProfilScreen />;
   } else if (tab === "traitements" && isAdmin) {
     content = <TraitementsScreen onOpenTraitement={openTraitement} />;
   } else if (tab === "eleves" && isAdmin) {
@@ -152,7 +156,7 @@ export default function App() {
           </div>
 
           <div className="gc-shell">
-            {estConnecte && <Nav tab={tab} setTab={switchTab} isAdmin={isAdmin} />}
+            {estConnecte && <Nav tab={tab} setTab={switchTab} isAdmin={isAdmin} isEleve={!!me.eleve} />}
             <main className="gc-main">
               <div className="gc-content">{content}</div>
             </main>

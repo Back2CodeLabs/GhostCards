@@ -117,6 +117,14 @@ def init_db() -> None:
         # une fois partagées entre élèves (voir Services/pronote_sync.py::
         # _synchroniser_eleve) ; affiché sur sa fiche (écran admin Élèves).
         _ensure_column(conn, "eleves", "pronote_groupes", "TEXT")
+        # Clé Gemini personnelle (écran "Profil" élève, FrontEnd/src/screens/
+        # ProfilScreen.jsx) — chiffrée au repos comme pronote_credentials.
+        # Utilisée en priorité sur le moteur IA choisi par l'admin pour LES
+        # GÉNÉRATIONS DÉCLENCHÉES PAR CET ÉLÈVE (voir Services/ia_generation.py),
+        # pour répartir la charge/le quota Gemini entre plusieurs clés
+        # personnelles plutôt que tout faire peser sur celle de l'admin —
+        # même principe que le pairage Pronote par élève.
+        _ensure_column(conn, "eleves", "gemini_api_key", "TEXT")
         _ensure_column(conn, "eleves", "pronote_sync_statut", "TEXT")
         _ensure_column(conn, "eleves", "pronote_sync_erreur", "TEXT")
         _ensure_column(conn, "eleves", "pronote_derniere_synchro", "TEXT")

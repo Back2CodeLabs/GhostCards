@@ -347,6 +347,57 @@ def api_me(request: Request):
     return {"eleve": _current_eleve(request), "is_admin": bool(request.session.get("is_admin"))}
 
 
+def _require_eleve(request: Request) -> int:
+    """Réservé aux élèves pairés — jamais l'admin (pas de ligne `eleves` pour lui)."""
+    eleve_id = request.session.get("eleve_id")
+    if not eleve_id:
+        raise HTTPException(403, "Réservé aux élèves.")
+    return eleve_id
+
+
+@app.get("/api/profil")
+def profil(request: Request):
+    """
+    Écran "Profil" élève (FrontEnd/src/screens/ProfilScreen.jsx) : identité
+    en lecture seule (Pronote fait déjà foi) + statut de la clé Gemini
+    personnelle — jamais la clé elle-même, seulement si une est enregistrée
+    (même principe que pour les identifiants Pronote, jamais renvoyés).
+    """
+    eleve_id = _require_eleve(request)
+    with db.session() as conn:
+        row = conn.execute(
+            "SELECT nom, pronote_class_name, pronote_groupes, gemini_api_key FROM eleves WHERE id = ?", (eleve_id,)
+        ).fetchone()
+        return {
+            "nom": row["nom"],
+            "classe": row["pronote_class_name"],
+            "groupes": row["pronote_groupes"],
+            "gemini_cle_definie": bool(row["gemini_api_key"]),
+        }
+
+
+class GeminiClePayload(BaseModel):
+    cle: str | None = None
+
+
+@app.put("/api/profil/gemini-cle")
+def definir_cle_gemini(payload: GeminiClePayload, request: Request):
+    """
+    Enregistre (ou efface, `cle` vide/absente) la clé Gemini personnelle de
+    l'élève connecté — voir Services/ia_generation.py pour son usage
+    (prioritaire sur le moteur choisi par l'admin, pour SES propres
+    générations). Chiffrée au repos comme les identifiants Pronote : accès
+    direct à un compte Google réel, même si le risque concret est moindre
+    (juste un quota d'API à protéger, pas des données scolaires).
+    """
+    eleve_id = _require_eleve(request)
+    cle = (payload.cle or "").strip()
+    cle_chiffree = crypto_secrets.chiffrer_json({"cle": cle}) if cle else None
+    with db.session() as conn:
+        conn.execute("UPDATE eleves SET gemini_api_key = ? WHERE id = ?", (cle_chiffree, eleve_id))
+    return {"ok": True, "gemini_cle_definie": cle_chiffree is not None}
+
+
 @app.get("/api/matieres")
 def list_matieres(request: Request):
     _require_session(request)
@@ -623,7 +674,11 @@ def generer_contenu_ia(cours_id: int, request: Request, background_tasks: Backgr
         # cette réponse) peut arriver avant que la tâche n'ait eu la main,
         # et rater la transition 'en_cours' dont dépend son polling.
         conn.execute("UPDATE cours SET ia_statut = 'en_cours' WHERE id = ?", (cours_id,))
-    background_tasks.add_task(ia_generation.generer_pour_cours, cours_id)
+    # eleve_id : si l'élève à l'origine du clic a sa propre clé Gemini
+    # (écran Profil), elle prime sur le moteur choisi par l'admin pour
+    # CETTE génération (voir Services/ia_generation.py) — None pour
+    # l'admin, qui n'a pas de clé personnelle.
+    background_tasks.add_task(ia_generation.generer_pour_cours, cours_id, eleve_id=request.session.get("eleve_id"))
     return {"status": "generation_lancee"}
 
 
@@ -676,7 +731,7 @@ def completer_contenu_ia(cours_id: int, request: Request, background_tasks: Back
         if not cours["ia_flashcards"]:
             raise HTTPException(400, "Génère d'abord le résumé/flashcards/quiz avant de les compléter.")
         conn.execute("UPDATE cours SET ia_statut = 'en_cours' WHERE id = ?", (cours_id,))
-    background_tasks.add_task(ia_generation.completer_pour_cours, cours_id)
+    background_tasks.add_task(ia_generation.completer_pour_cours, cours_id, eleve_id=request.session.get("eleve_id"))
     return {"status": "completion_lancee"}
 
 

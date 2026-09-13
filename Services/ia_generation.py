@@ -34,7 +34,7 @@ import time
 import urllib.error
 import urllib.request
 
-from . import db, ocr
+from . import crypto_secrets, db, ocr
 from .config import (
     IA_ENGINE,
     OLLAMA_URL,
@@ -115,6 +115,38 @@ def config_ia(conn) -> dict:
         "prompt_generation_consigne": db.get_parametre(conn, "ia_prompt_generation_consigne", "") or None,
         "prompt_completion_consigne": db.get_parametre(conn, "ia_prompt_completion_consigne", "") or None,
     }
+
+
+def _avec_cle_gemini_perso(conn, cfg: dict, eleve_id: int | None) -> dict:
+    """
+    Si l'élève à l'origine de cette génération a enregistré sa propre clé
+    Gemini (écran "Profil", voir BackEnd/app/main.py::definir_cle_gemini),
+    elle prime TOUJOURS sur le moteur choisi par l'admin pour cette
+    génération précise — même sur Ollama/Claude par défaut. Chaque clé a
+    son propre quota Google gratuit : ça répartit la charge entre plusieurs
+    clés personnelles plutôt que de tout faire peser sur celle, partagée,
+    de l'admin (même principe que le pairage Pronote par élève, voir
+    Services/pronote_sync.py). `eleve_id` est None pour l'admin (pas de
+    ligne `eleves`) et pour une régénération qu'il valide lui-même — dans
+    ces cas, le moteur global s'applique sans changement.
+    """
+    if eleve_id is None:
+        return cfg
+    row = conn.execute("SELECT gemini_api_key FROM eleves WHERE id = ?", (eleve_id,)).fetchone()
+    if not row or not row["gemini_api_key"]:
+        return cfg
+    try:
+        cle = crypto_secrets.dechiffrer_json(row["gemini_api_key"])["cle"]
+    except crypto_secrets.SecretsError:
+        # Clé de chiffrement du serveur changée depuis, ou ligne corrompue —
+        # ne doit pas faire échouer la génération : on retombe sur le moteur
+        # global, comme si l'élève n'avait pas de clé personnelle.
+        log.warning("Clé Gemini personnelle illisible pour l'élève id=%s, moteur global utilisé", eleve_id)
+        return cfg
+    cfg = dict(cfg)
+    cfg["moteur"] = "gemini"
+    cfg["gemini_api_key"] = cle
+    return cfg
 
 
 def lister_modeles_ollama(url: str) -> list[str]:
@@ -562,8 +594,13 @@ def _transcrire_documents_manquants(cours_id: int) -> None:
             log.warning("Échec de la transcription du document id=%s avant génération IA", document_id, exc_info=True)
 
 
-def generer_pour_cours(cours_id: int) -> None:
-    """Génère résumés (court + détaillé)/flashcards/quiz pour un cours et les enregistre sur la ligne `cours`."""
+def generer_pour_cours(cours_id: int, eleve_id: int | None = None) -> None:
+    """
+    Génère résumés (court + détaillé)/flashcards/quiz pour un cours et les
+    enregistre sur la ligne `cours`. `eleve_id` : élève à l'origine du clic
+    (voir _avec_cle_gemini_perso) — None pour l'admin/une régénération qu'il
+    valide lui-même.
+    """
     _transcrire_documents_manquants(cours_id)
     with db.session() as conn:
         row = conn.execute("SELECT * FROM cours WHERE id = ?", (cours_id,)).fetchone()
@@ -571,7 +608,7 @@ def generer_pour_cours(cours_id: int) -> None:
             raise GenerationError(f"Cours {cours_id} introuvable")
         cours = dict(row)
         texte = _texte_source(conn, cours)
-        cfg = config_ia(conn)
+        cfg = _avec_cle_gemini_perso(conn, config_ia(conn), eleve_id)
         # Passage par 'en_cours' même pour un échec immédiat (contenu vide) :
         # sans ça, le frontend (qui ne poll que si ia_statut === 'en_cours')
         # peut ne jamais voir passer le statut 'echec' si son unique
@@ -645,11 +682,12 @@ def generer_pour_cours(cours_id: int) -> None:
         )
 
 
-def completer_pour_cours(cours_id: int, n: int = N_COMPLEMENT) -> None:
+def completer_pour_cours(cours_id: int, n: int = N_COMPLEMENT, eleve_id: int | None = None) -> None:
     """
     Ajoute `n` flashcards et `n` questions de quiz supplémentaires à une
     génération déjà en place (bouton "+ 10" côté frontend), sans toucher
     au résumé ni aux flashcards/quiz déjà générés — juste un complément.
+    `eleve_id` : voir generer_pour_cours/_avec_cle_gemini_perso.
     """
     _transcrire_documents_manquants(cours_id)
     with db.session() as conn:
@@ -664,7 +702,7 @@ def completer_pour_cours(cours_id: int, n: int = N_COMPLEMENT) -> None:
         if not cours.get("ia_flashcards"):
             raise GenerationError("Génère d'abord le résumé/flashcards/quiz avant de les compléter.")
         texte_memorise = cours.get("ia_texte_source")
-        cfg = config_ia(conn)
+        cfg = _avec_cle_gemini_perso(conn, config_ia(conn), eleve_id)
         flashcards_existantes = json.loads(cours["ia_flashcards"]) if cours["ia_flashcards"] else []
         quiz_existant = json.loads(cours["ia_quiz"]) if cours["ia_quiz"] else []
         conn.execute("UPDATE cours SET ia_statut = 'en_cours' WHERE id = ?", (cours_id,))
