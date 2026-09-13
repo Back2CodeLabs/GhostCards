@@ -112,6 +112,11 @@ def init_db() -> None:
         # supérieure au credentials.json unique de l'admin.
         _ensure_column(conn, "eleves", "pronote_credentials", "TEXT")
         _ensure_column(conn, "eleves", "pronote_class_name", "TEXT")
+        # Groupe(s) constaté(s) dans l'emploi du temps propre à CET élève
+        # (LV2, options...) — pas déductible des lignes `cours` elles-mêmes
+        # une fois partagées entre élèves (voir Services/pronote_sync.py::
+        # _synchroniser_eleve) ; affiché sur sa fiche (écran admin Élèves).
+        _ensure_column(conn, "eleves", "pronote_groupes", "TEXT")
         _ensure_column(conn, "eleves", "pronote_sync_statut", "TEXT")
         _ensure_column(conn, "eleves", "pronote_sync_erreur", "TEXT")
         _ensure_column(conn, "eleves", "pronote_derniere_synchro", "TEXT")

@@ -811,7 +811,7 @@ def list_eleves(request: Request):
     with db.session() as conn:
         rows = conn.execute(
             """SELECT e.id, e.nom, e.email, e.avatar_url, e.created_at, e.derniere_connexion,
-                      e.assistant_actif, e.pronote_class_name, e.pronote_sync_statut,
+                      e.assistant_actif, e.pronote_class_name, e.pronote_groupes, e.pronote_sync_statut,
                       e.pronote_sync_erreur, e.pronote_derniere_synchro, e.consentement_pronote_le,
                       COUNT(n.id) AS nb_notes
                FROM eleves e LEFT JOIN notes_eleves n ON n.eleve_id = e.id

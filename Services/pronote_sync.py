@@ -276,10 +276,10 @@ def _transcrire_document_silencieux(document_id: int | None) -> None:
 STAGGER_ELEVES_S = 5
 
 
-def _synchroniser_compte(client, cfg, date_from, date_to, fetch_content, counters, documents_a_transcrire, *, eleve_id=None):
+def _synchroniser_compte(client, cfg, date_from, date_to, fetch_content, counters, documents_a_transcrire, *, eleve_id=None, groupes_vus=None):
     """Cours/devoirs (partagés) + notes (scopées par eleve_id) pour un client déjà connecté."""
     with db.session() as conn:
-        _sync_lessons(conn, client, date_from, date_to, fetch_content, counters, documents_a_transcrire, cfg["matieres_exclues_slugs"])
+        _sync_lessons(conn, client, date_from, date_to, fetch_content, counters, documents_a_transcrire, cfg["matieres_exclues_slugs"], groupes_vus=groupes_vus)
     with db.session() as conn:
         _sync_homework(conn, client, date_from, date_to, counters, documents_a_transcrire, cfg["matieres_exclues_slugs"])
     with db.session() as conn:
@@ -297,17 +297,26 @@ def _synchroniser_eleve(eleve_row, cfg, date_from, date_to, fetch_content, count
     eleve_id, nom = eleve_row["id"], eleve_row["nom"]
     t0 = time.monotonic()
     avant = dict(counters)
+    groupes_vus: set[str] = set()
     try:
         client, nouvelles_credentials = _get_client_eleve(eleve_row["pronote_credentials"])
         with db.session() as conn:
             conn.execute("UPDATE eleves SET pronote_credentials = ? WHERE id = ?", (nouvelles_credentials, eleve_id))
 
-        _synchroniser_compte(client, cfg, date_from, date_to, fetch_content, counters, documents_a_transcrire, eleve_id=eleve_id)
+        _synchroniser_compte(
+            client, cfg, date_from, date_to, fetch_content, counters, documents_a_transcrire,
+            eleve_id=eleve_id, groupes_vus=groupes_vus,
+        )
 
         with db.session() as conn:
+            # COALESCE : une fenêtre de synchro qui ne recroise aucun
+            # créneau à groupe (LV2, options...) ne doit pas effacer un
+            # groupe déjà connu d'une synchro précédente — seule une
+            # nouvelle détection non vide remplace la valeur enregistrée.
             conn.execute(
-                "UPDATE eleves SET pronote_sync_statut = 'actif', pronote_sync_erreur = NULL, pronote_derniere_synchro = ? WHERE id = ?",
-                (_now(), eleve_id),
+                """UPDATE eleves SET pronote_sync_statut = 'actif', pronote_sync_erreur = NULL,
+                   pronote_derniere_synchro = ?, pronote_groupes = COALESCE(?, pronote_groupes) WHERE id = ?""",
+                (_now(), ", ".join(sorted(groupes_vus)) if groupes_vus else None, eleve_id),
             )
         ctx.etape(
             f"compte élève : {nom}",
@@ -446,7 +455,7 @@ def sync(fetch_content: bool = True, traitement_id: int | None = None) -> dict:
     return counters
 
 
-def _sync_lessons(conn, client, date_from, date_to, fetch_content, counters, documents_a_transcrire, matieres_exclues_slugs):
+def _sync_lessons(conn, client, date_from, date_to, fetch_content, counters, documents_a_transcrire, matieres_exclues_slugs, groupes_vus=None):
     try:
         lessons = client.lessons(date_from, date_to)
     except requests.exceptions.RequestException as e:
@@ -476,6 +485,8 @@ def _sync_lessons(conn, client, date_from, date_to, fetch_content, counters, doc
         statut = getattr(lesson, "status", None) if annule else None
         salle = ", ".join(getattr(lesson, "classrooms", None) or []) or None
         groupe = ", ".join(getattr(lesson, "group_names", None) or []) or None
+        if groupes_vus is not None and groupe:
+            groupes_vus.update(g.strip() for g in groupe.split(",") if g.strip())
         memo = getattr(lesson, "memo", None)
         devoir_surveille = int(bool(getattr(lesson, "test", False)))
 

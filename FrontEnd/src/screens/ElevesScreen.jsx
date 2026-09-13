@@ -75,8 +75,12 @@ export function ElevesScreen() {
             )}
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 13.5, color: C.ink, fontWeight: 600 }}>{e.nom}</div>
-              <div style={{ fontSize: 12, color: C.inkSoft, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              <div
+                style={{ fontSize: 12, color: C.inkSoft, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                title={e.pronote_groupes ? `Groupe(s) : ${e.pronote_groupes}` : undefined}
+              >
                 {e.pronote_class_name || "classe inconnue"}
+                {e.pronote_groupes && ` · ${e.pronote_groupes}`}
                 {e.pronote_sync_statut === "echec" && (
                   <span style={{ color: C.brick, marginLeft: 6 }} title={e.pronote_sync_erreur || ""}>
                     <XCircle size={11} style={{ display: "inline", verticalAlign: -1, marginRight: 3 }} />
