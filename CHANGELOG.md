@@ -5,6 +5,24 @@ Numéro de version affiché dans l'app (voir `FrontEnd/package.json`, injecté
 via `vite.config.js`) — à incrémenter à chaque publication sur l'OptiPlex,
 avec une nouvelle entrée ici.
 
+## [0.6.0] — en cours
+
+### Added
+- Génération manuelle : un élève peut copier le prompt exact que Ghost
+  School utiliserait pour un cours, le coller dans sa propre IA (ChatGPT,
+  Gemini, Claude...) hors Ghost School, puis importer le JSON obtenu en
+  retour — utile quand Ollama est trop lent ou indisponible. Toujours en
+  attente de validation admin (écran Traitements → "En attente") avant de
+  remplacer le contenu partagé de la classe. Désactivé par défaut pour
+  chaque élève, comme l'assistant IA (écran admin "Élèves").
+
+### Fixed
+- Écran Traitements : le bouton "Relancer" apparaissait par erreur sur le
+  détail d'une demande en attente (régénération ou import manuel), où il
+  déclenchait en réalité une génération immédiate en contournant le
+  circuit de validation — masqué pour ces deux types, qui n'ont pas de
+  notion de "relance" (seulement valider/rejeter).
+
 ## [0.5.1] — en cours
 
 ### Changed

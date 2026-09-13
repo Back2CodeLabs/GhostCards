@@ -74,9 +74,6 @@ commencé". En résumé :
 - Gamification (streaks/XP/ligues) — en attente de retours de la classe
   avant de cadrer, la partie "ligue" comparant des élèves entre eux
   méritant une décision de principe au préalable.
-- Génération manuelle hors Ghost School (élève utilise sa propre IA à
-  partir d'un prompt fourni par l'app) puis import du résultat — prévu
-  pour la version 0.6.0, pas encore cadré.
 
 ## Fait
 
@@ -120,3 +117,9 @@ commencé". En résumé :
 - Exposition hors réseau local en HTTPS (domaine + Caddy/Let's Encrypt) —
   voir `Services/README.md`, section "Exposer le site hors du réseau
   local".
+- **Génération manuelle** : un élève copie le prompt exact que Ghost
+  School utiliserait pour un cours, le colle dans sa propre IA (ChatGPT,
+  Gemini, Claude...) hors Ghost School, puis importe la réponse — toujours
+  soumis à validation admin avant de remplacer le contenu partagé de la
+  classe (écran admin "Traitements" → "En attente"). Désactivé par défaut
+  pour chaque élève, comme l'assistant — voir `Services/README.md`.

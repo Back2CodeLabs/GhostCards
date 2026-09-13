@@ -193,6 +193,45 @@ au modèle sur un cours long.
 à activer au cas par cas depuis l'écran admin "Élèves" (bouton bascule).
 L'admin y a toujours accès.
 
+## Génération manuelle (v0.6.0)
+
+Alternative au bouton "Générer" pour un élève qui préfère utiliser sa
+propre IA (ChatGPT, Gemini, Claude...) plutôt que d'attendre Ollama
+(jusqu'à ~30 min sur un cours complet) : depuis la page d'un cours, un
+bloc dépliable "Générer avec ma propre IA" affiche le prompt EXACT que
+Ghost School utiliserait (`GET /api/cours/{id}/prompt-manuel` —
+`ia_generation.construire_prompt_generation`/`texte_source`, sans le
+découpage propre à Ollama, un outil externe ayant un contexte largement
+suffisant pour un cours entier), à copier-coller dans l'outil de son
+choix ; la réponse JSON de cet outil se colle ensuite dans un second champ
+et s'envoie via `POST /api/cours/{id}/importer-manuel`.
+
+Contrairement à une génération automatique (dont la forme est garantie
+par le mode JSON forcé d'Ollama/Gemini), ce texte est entièrement écrit
+par un outil externe et peut être malformé — `ia_generation.parser_json_
+ia` tolère un JSON entouré de texte parasite (balises markdown, phrase
+d'intro...), et `ia_generation.valider_forme_generation` vérifie
+ensuite chaque champ (résumés non vides, flashcards avec question/
+réponse, quiz à 4 options avec un `reponse_index` valide) — une erreur
+renvoie un message clair à l'élève (400) plutôt que de laisser passer un
+cours cassé.
+
+Le contenu validé n'est **jamais appliqué directement** : il crée
+toujours une demande en attente (table `traitements`, type
+`import_demande`, à côté de `regeneration_demande`) que l'admin valide
+ou rejette depuis l'écran "Traitements" → "En attente" — comme ce texte
+n'est jamais passé par le prompt contrôlé de Ghost School, un élève
+pourrait y coller n'importe quoi ; la validation protège le contenu
+partagé de la classe. Une fois validé, le contenu remplace résumé/
+flashcards/quiz du cours comme une génération normale (`cours.ia_origine`
+passe à `'import'`, purement informatif — badge/traçabilité, aucune règle
+de filtrage n'en dépend).
+
+**Désactivée par défaut pour chaque élève** (`eleves.generation_manuelle_
+actif`), exactement comme l'assistant ci-dessus — à activer au cas par
+cas depuis l'écran admin "Élèves". L'admin y a toujours accès, lui, sans
+dépendre de ce flag.
+
 ## Authentification élève (pairage Pronote)
 
 Le site est **verrouillé** : consulter quoi que ce soit (cours, résumés,
@@ -287,9 +326,10 @@ Deux endroits distincts :
 ### Admin : gérer les comptes élèves
 
 Écran admin "Élèves" : statut de chaque élève pairé (classe constatée,
-lien Pronote cassé ou non), et un bouton "Re-pairer" qui efface le jeton
+lien Pronote cassé ou non), un bouton "Re-pairer" qui efface le jeton
 stocké — l'élève reprendra le flux de connexion (upload QR + PIN) à sa
-prochaine visite.
+prochaine visite — et deux bascules par élève, désactivées par défaut :
+"Assistant" et "Génération manuelle" (voir plus haut).
 
 ## Profil élève
 

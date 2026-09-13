@@ -68,16 +68,21 @@ connecté ne peut rien consulter.
 - **Cours** : `GET /api/cours/suggestion-ia` ("Quiz du jour"), `GET
   /api/cours/du-jour`, `GET /api/cours/recents`, `GET /api/cours/{id}`,
   `POST /api/cours/{id}/generer|completer|verifier|notes`. Admin : `GET
-  /api/cours/non-generes`.
+  /api/cours/non-generes`. Génération manuelle (v0.6.0, désactivée par
+  défaut par élève — voir "Élèves" ci-dessous) : `GET
+  /api/cours/{id}/prompt-manuel` (prompt à copier), `POST
+  /api/cours/{id}/importer-manuel` (JSON collé, toujours en attente de
+  validation admin).
 - **Devoirs** : `GET /api/devoirs`.
 - **Documents** : `GET /api/documents/{id}/fichier|apercu`. Admin : `GET
   /api/documents/non-transcrits`, `POST /api/documents/{id}/transcrire`.
-- **Élèves** (admin) : `GET /api/eleves`, `PUT
-  /api/eleves/{id}/assistant`, `POST
+- **Élèves** (admin) : `GET /api/eleves`, `PUT /api/eleves/{id}/assistant`,
+  `PUT /api/eleves/{id}/generation-manuelle`, `POST
   /api/eleves/{id}/reinitialiser-pronote` (force un re-pairage).
 - **Traitements** (admin, diagnostic) : `GET /api/traitements`, `GET
   /api/traitements/{id}`, `POST /api/traitements/{id}/relancer`, +
-  validation/rejet des demandes de régénération.
+  validation/rejet des demandes en attente (régénération ou import
+  manuel, `POST /api/traitements/demandes/{id}/valider|rejeter`).
 - **Paramétrage** (admin) : `GET/PUT /api/parametres` (moteur IA, Pronote,
   OCR, vérification — clés jamais renvoyées en clair).
 - **Synchro** : `POST /api/sync` (force une synchronisation immédiate).

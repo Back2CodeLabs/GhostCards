@@ -657,6 +657,65 @@ sous-processus ni fichiers `.env` de test. Voir `BackEnd/tests/
 conftest.py` pour le détail des fixtures, `BackEnd/README.md` section
 "Tests" pour la commande.
 
+## État — fonctionnel et testé (13 septembre 2026, suite : génération manuelle v0.6.0)
+
+Un élève peut désormais copier le prompt exact que Ghost School utilise
+pour générer résumé/flashcards/quiz (`GET /api/cours/{id}/prompt-manuel`,
+même texte source et même consigne que la génération automatique — voir
+`Services/ia_generation.py::construire_prompt_generation`/`texte_source`,
+mais SANS le découpage propre à Ollama, un outil externe ayant un
+contexte largement suffisant), le coller dans sa propre IA (ChatGPT,
+Gemini, Claude...) hors Ghost School, puis coller la réponse JSON pour
+l'importer (`POST /api/cours/{id}/importer-manuel`) — utile quand Ollama
+est trop lent (jusqu'à ~30 min) ou indisponible.
+
+Décisions prises en mode plan avant de développer :
+- **Contenu partagé avec la classe**, pas un espace personnel séparé —
+  mêmes colonnes `cours.ia_resume`/`ia_flashcards`/`ia_quiz` que la
+  génération automatique ; `cours.ia_origine` ('app' | 'import') distingue
+  les deux, purement informatif (badge), sans changer aucune règle de
+  filtrage.
+- **Toujours une validation admin avant application**, cours vierge ou
+  non — contrairement à une première génération automatique (qui part
+  immédiatement) : ce texte n'est jamais passé par le prompt contrôlé de
+  Ghost School, un élève peut coller absolument n'importe quoi. Réutilise
+  le circuit déjà en place pour la régénération (`traitements`, type
+  `import_demande` à côté de `regeneration_demande`, mêmes endpoints
+  `/api/traitements/demandes/{id}/valider|rejeter` généralisés) — sauf
+  que le contenu à appliquer est déjà connu et validé au moment de la
+  demande (`resultat` rempli dès la création), donc l'admin le relit
+  (`ResultatFormatte` le met déjà en forme, aucun changement nécessaire)
+  avant de décider, et la validation n'a pas besoin de relancer un appel
+  modèle — juste d'écrire le contenu déjà stocké (`Services/
+  ia_generation.py::importer_manuel`).
+- **Désactivée par défaut pour chaque élève** (`eleves.generation_
+  manuelle_actif`), comme l'assistant IA — activable au cas par cas
+  depuis l'écran admin "Élèves" (`_peut_generer_manuellement`, copie
+  conforme de `_peut_utiliser_assistant`).
+
+Le JSON collé n'est contraint par AUCUN mode JSON de modèle (contrairement
+à Ollama/Gemini en mode forcé) : une vraie validation de forme a été
+ajoutée pour l'occasion (`Services/ia_generation.py::valider_forme_
+generation` — vérifie chaque clé/type, flashcards/quiz non vides, options
+au nombre de 4, `reponse_index` dans les bornes), là où la génération
+automatique ne validait jusque-là RIEN de la forme (un modèle en mode JSON
+forcé produit une forme correcte par construction). Le parsing tolérant
+déjà écrit pour Claude (extraction d'un JSON entouré de texte parasite,
+balises markdown, phrase d'intro...) a été extrait en fonction
+réutilisable (`parser_json_ia`, ex-`_appeler_claude` inline) plutôt que
+dupliqué.
+
+Bug trouvé et corrigé au passage : l'écran Traitements affichait un
+bouton "Relancer" sur le détail de N'IMPORTE QUEL traitement (y compris
+une demande en attente), qui déclenchait en réalité une génération
+immédiate via `ocr.relancer_traitement` en contournant tout le circuit de
+validation. Resté invisible jusqu'ici car aucune demande n'était
+cliquable vers son détail — le problème n'est apparu qu'en rendant les
+demandes d'import cliquables (nécessaire pour que l'admin puisse
+prévisualiser le contenu avant de le valider). Masqué pour les deux types
+de demande (`regeneration_demande`, `import_demande`), qui n'ont pas de
+notion de "relance" — seulement valider/rejeter.
+
 ## État — pas commencé
 
 - ~~**Exposition hors LAN**~~ — fait (2026-09-12) : domaine
@@ -707,17 +766,6 @@ conftest.py` pour le détail des fixtures, `BackEnd/README.md` section
   casserait silencieusement la synchro de cet élève, contraintes
   d'exécution en arrière-plan iOS/Android). À reconsidérer seulement si
   Pronote se met vraiment à bloquer/ralentir l'OptiPlex.
-- **Génération manuelle hors Ghost School, injectée ensuite** (demandé
-  pour la version 0.6.0, le 13 septembre 2026) : un élève pourrait générer
-  ses flashcards/quiz avec sa propre IA (hors Ghost School — ex. ChatGPT/
-  Gemini directement), à partir d'un prompt fourni par l'app, puis
-  importer le résultat dans Ghost School. Pas encore cadré : il faudra au
-  minimum un endpoint d'import qui valide/parse un contenu JSON externe
-  (même format que `ia_generation.py` attend en sortie — flashcards/quiz),
-  et décider si l'import remplace une génération existante ou s'ajoute
-  (comme "+ 10", ou un nouveau statut `ia_statut` distinct de 'pret' pour
-  distinguer un contenu importé d'un contenu généré par l'app). Prévoir un
-  vrai plan avant de commencer, comme pour le multi-classe.
 
 ## Bugs déjà rencontrés et corrigés (ne pas réintroduire)
 
@@ -835,7 +883,10 @@ reprendre le travail :
    cassé, rate-limit), et l'écran "Paramétrage" pour confirmer que la
    liste des classes et les clés IA sont toujours celles attendues.
 
-Prochain chantier envisagé : la version 0.6.0 (génération manuelle hors
-Ghost School par l'élève, avec sa propre IA, puis import du résultat —
-voir "État — pas commencé" ci-dessus). Pas encore cadré en détail au
-13 septembre 2026.
+La version 0.6.0 (génération manuelle hors Ghost School par l'élève, avec
+sa propre IA, puis import du résultat — voir la section dédiée dans "État
+— fonctionnel et testé" ci-dessus) est développée et vérifiée en sandbox
+(pytest + navigateur) au 13 septembre 2026, mais **pas encore déployée
+sur l'OptiPlex** : suivre les étapes ci-dessus (`git pull`, dépendances,
+build frontend, redémarrage du service) une fois prête à publier, avec
+une nouvelle entrée `CHANGELOG.md` passant de "en cours" à une date réelle.
