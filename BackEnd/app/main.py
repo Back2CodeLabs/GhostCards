@@ -472,6 +472,7 @@ def list_matieres(request: Request, classe: str | None = None):
                    FROM matieres m
                    JOIN cours c ON c.matiere_id = m.id AND c.classe = ?
                    LEFT JOIN documents d ON d.cours_id = c.id
+                   WHERE m.exclue = 0
                    GROUP BY m.id ORDER BY m.nom""",
                 (classe_filtre,),
             ).fetchall()
@@ -483,9 +484,45 @@ def list_matieres(request: Request, classe: str | None = None):
                    FROM matieres m
                    LEFT JOIN cours c ON c.matiere_id = m.id
                    LEFT JOIN documents d ON d.cours_id = c.id
+                   WHERE m.exclue = 0
                    GROUP BY m.id ORDER BY m.nom"""
             ).fetchall()
         return [dict(r) for r in rows]
+
+
+@app.get("/api/parametres/matieres")
+def list_matieres_admin(request: Request):
+    """
+    Toutes les matières déjà vues par la synchro, exclue ou non (voir
+    `matieres.exclue`) — pour la case à cocher de l'écran Paramétrage →
+    Pronote. Se base sur ce qui a réellement été récupéré plutôt qu'une
+    liste de noms tapés à l'avance : `GET /api/matieres` (utilisé pour la
+    navigation) reste, lui, toujours filtré aux matières non exclues.
+    """
+    _require_admin(request)
+    with db.session() as conn:
+        rows = conn.execute("SELECT id, nom, exclue FROM matieres ORDER BY nom").fetchall()
+        return [dict(r) for r in rows]
+
+
+class ExclureMatierePayload(BaseModel):
+    exclue: bool
+
+
+@app.put("/api/matieres/{matiere_id}/exclure")
+def exclure_matiere(matiere_id: int, payload: ExclureMatierePayload, request: Request):
+    """
+    Masque (ou démasque) une matière déjà connue — n'affecte jamais la
+    synchro elle-même (voir Services/pronote_sync.py, tout est toujours
+    ingéré), seulement ce qui est montré dans l'app (accueil, matières,
+    devoirs...).
+    """
+    _require_admin(request)
+    with db.session() as conn:
+        if conn.execute("SELECT 1 FROM matieres WHERE id = ?", (matiere_id,)).fetchone() is None:
+            raise HTTPException(404, "Matière introuvable.")
+        conn.execute("UPDATE matieres SET exclue = ? WHERE id = ?", (int(payload.exclue), matiere_id))
+    return {"ok": True}
 
 
 
@@ -580,7 +617,7 @@ def suggestion_ia(request: Request, classe: str | None = None):
         pret = conn.execute(
             f"""SELECT c.id, m.nom AS matiere, c.titre
                FROM cours c JOIN matieres m ON m.id = c.matiere_id
-               WHERE c.ia_statut = 'pret' {classe_clause}
+               WHERE c.ia_statut = 'pret' AND m.exclue = 0 {classe_clause}
                ORDER BY c.date DESC, c.heure_debut DESC LIMIT 1""",
             params,
         ).fetchone()
@@ -590,7 +627,7 @@ def suggestion_ia(request: Request, classe: str | None = None):
         a_generer = conn.execute(
             f"""SELECT c.id, m.nom AS matiere, c.titre
                FROM cours c JOIN matieres m ON m.id = c.matiere_id
-               WHERE c.ia_statut IN ('absent', 'echec') {classe_clause}
+               WHERE c.ia_statut IN ('absent', 'echec') AND m.exclue = 0 {classe_clause}
                  AND (
                    (c.description IS NOT NULL AND c.description != '')
                    OR EXISTS (
@@ -630,7 +667,7 @@ def cours_du_jour(request: Request, classe: str | None = None):
                        c.annule, c.statut, c.devoir_surveille, c.ia_statut, m.nom AS matiere, m.id AS matiere_id,
                        {_COMPTES_COURS_SQL}
                 FROM cours c JOIN matieres m ON m.id = c.matiere_id
-                WHERE c.date = ? {classe_clause} ORDER BY c.heure_debut""",
+                WHERE c.date = ? AND m.exclue = 0 {classe_clause} ORDER BY c.heure_debut""",
             params,
         ).fetchall()
         return [dict(r) for r in rows]
@@ -648,7 +685,7 @@ def recent_cours(request: Request, limit: int = 8, classe: str | None = None):
                        c.devoir_surveille, m.nom AS matiere, m.id AS matiere_id,
                        {_COMPTES_COURS_SQL}
                 FROM cours c JOIN matieres m ON m.id = c.matiere_id
-                WHERE c.annule = 0 {classe_clause}
+                WHERE c.annule = 0 AND m.exclue = 0 {classe_clause}
                 ORDER BY c.created_at DESC LIMIT ?""",
             params,
         ).fetchall()
@@ -677,7 +714,7 @@ def cours_non_generes(request: Request, classe: str | None = None):
         rows = conn.execute(
             f"""SELECT c.id, c.date, c.heure_debut, c.titre, m.nom AS matiere, c.ia_statut, c.ia_erreur
                FROM cours c JOIN matieres m ON m.id = c.matiere_id
-               WHERE c.ia_statut IN ('absent', 'echec') {classe_clause}
+               WHERE c.ia_statut IN ('absent', 'echec') AND m.exclue = 0 {classe_clause}
                  AND (
                    (c.description IS NOT NULL AND c.description != '')
                    OR EXISTS (
@@ -1115,9 +1152,6 @@ def get_parametres(request: Request):
         pronote_cfg = pronote_sync.config_pronote(conn)
         ocr_cfg = ocr.config_ocr(conn)
         verif_cfg = ia_verification.config_verif(conn)
-        matieres_exclues = db.get_parametre(
-            conn, "matieres_exclues", "Réunion parents-profs, Journée du sport scolaire"
-        )
     return {
         "ia_moteur": moteur if moteur in ("ollama", "gemini", "claude") else "ollama",
         "ollama_url": ollama_url or OLLAMA_URL,
@@ -1140,7 +1174,6 @@ def get_parametres(request: Request):
         "pronote_url": pronote_cfg["pronote_url"],
         "sync_days_back": pronote_cfg["sync_days_back"],
         "sync_days_forward": pronote_cfg["sync_days_forward"],
-        "matieres_exclues": matieres_exclues,
         "pronote_jeton_present": CREDENTIALS_PATH.exists(),
         "ocr_engine": ocr_cfg["moteur"],
         "paddleocr_enable_mkldnn": ocr_cfg["paddleocr_enable_mkldnn"],
@@ -1185,7 +1218,6 @@ class ParametresIA(BaseModel):
     pronote_url: str | None = None
     sync_days_back: int | None = None
     sync_days_forward: int | None = None
-    matieres_exclues: str | None = None
     ocr_engine: str | None = None
     paddleocr_enable_mkldnn: bool | None = None
     verif_moteur: str | None = None
@@ -1235,8 +1267,6 @@ def set_parametres(payload: ParametresIA, request: Request):
             db.set_parametre(conn, "sync_days_back", str(payload.sync_days_back))
         if payload.sync_days_forward is not None:
             db.set_parametre(conn, "sync_days_forward", str(payload.sync_days_forward))
-        if payload.matieres_exclues is not None:
-            db.set_parametre(conn, "matieres_exclues", payload.matieres_exclues)
         if payload.ocr_engine:
             db.set_parametre(conn, "ocr_engine", payload.ocr_engine)
         if payload.paddleocr_enable_mkldnn is not None:
@@ -1262,7 +1292,7 @@ def list_devoirs(request: Request, classe: str | None = None):
         rows = conn.execute(
             f"""SELECT d.id, d.date_rendu, d.description, d.fait, m.nom AS matiere
                FROM devoirs d JOIN matieres m ON m.id = d.matiere_id
-               WHERE d.fait = 0 {classe_clause} ORDER BY d.date_rendu""",
+               WHERE d.fait = 0 AND m.exclue = 0 {classe_clause} ORDER BY d.date_rendu""",
             params,
         ).fetchall()
         return [dict(r) for r in rows]

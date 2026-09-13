@@ -152,9 +152,15 @@ def init_db() -> None:
         # (vocabulaire de matières commun aux classes).
         _ensure_column(conn, "cours", "classe", "TEXT")
         _ensure_column(conn, "devoirs", "classe", "TEXT")
+        # Matières à exclure : masquée (invisible dans l'app) plutôt que
+        # jamais importée — voir Services/pronote_sync.py (la synchro
+        # ingère désormais tout, sans exception) et _migrer_matieres_
+        # exclues_defaut ci-dessous pour la reprise de l'ancien réglage.
+        _ensure_column(conn, "matieres", "exclue", "INTEGER NOT NULL DEFAULT 0")
         _fusionner_eleves_dupliques(conn)
         _migrer_cles_notes_pronote(conn)
         _migrer_classe_defaut(conn)
+        _migrer_matieres_exclues_defaut(conn)
         conn.commit()
 
 
@@ -471,17 +477,44 @@ def set_parametre(conn: sqlite3.Connection, cle: str, valeur: str) -> None:
     )
 
 
-def upsert_matiere(conn: sqlite3.Connection, nom: str) -> int:
-    slug = (
+def _slug_matiere(nom: str) -> str:
+    return (
         nom.lower()
         .replace("é", "e").replace("è", "e").replace("ê", "e")
         .replace("à", "a").replace("î", "i").replace("ô", "o")
         .replace("ç", "c").replace(" ", "-").replace("'", "-")
     )
+
+
+def upsert_matiere(conn: sqlite3.Connection, nom: str) -> int:
     row = conn.execute("SELECT id FROM matieres WHERE nom = ?", (nom,)).fetchone()
     if row:
         return row["id"]
     cur = conn.execute(
-        "INSERT INTO matieres (nom, slug) VALUES (?, ?)", (nom, slug)
+        "INSERT INTO matieres (nom, slug) VALUES (?, ?)", (nom, _slug_matiere(nom))
     )
     return cur.lastrowid
+
+
+def _migrer_matieres_exclues_defaut(conn: sqlite3.Connection) -> None:
+    """
+    Ancien réglage `matieres_exclues` (noms tapés à la main, comparés par
+    slug pour NE PAS importer certains créneaux au sync — voir Services/
+    pronote_sync.py) remplacé par une case à cocher par matière déjà
+    connue (écran Paramétrage), qui masque plutôt que d'empêcher l'import.
+    Migre une seule fois (marqueur `_migration_matieres_exclues_faite`) :
+    reprend l'ancienne liste pour cocher `exclue` sur les matières déjà en
+    base qui y correspondent, puis n'y touche plus JAMAIS — sans ce
+    garde-fou, un décochage manuel plus tard serait défait à chaque
+    redémarrage tant que l'ancien réglage reste en base.
+    """
+    if get_parametre(conn, "_migration_matieres_exclues_faite") == "1":
+        return
+    set_parametre(conn, "_migration_matieres_exclues_faite", "1")
+    ancienne = get_parametre(conn, "matieres_exclues") or ""
+    slugs_exclus = {_slug_matiere(nom.strip()) for nom in ancienne.split(",") if nom.strip()}
+    if not slugs_exclus:
+        return
+    for r in conn.execute("SELECT id, slug FROM matieres").fetchall():
+        if r["slug"] in slugs_exclus:
+            conn.execute("UPDATE matieres SET exclue = 1 WHERE id = ?", (r["id"],))
